@@ -1,0 +1,55 @@
+Metadata-Version: 2.4
+Name: age-oauth
+Version: 0.1.0
+Summary: ArcGIS Enterprise OAuth helper with per user token cache.
+Author: Talon5
+License: AGPL-3.0-or-later
+Classifier: License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests>=2.31
+Requires-Dist: arcgis
+Provides-Extra: dotenv
+Requires-Dist: python-dotenv>=1.0; extra == "dotenv"
+Provides-Extra: mapping
+Requires-Dist: arcgis-mapping; extra == "mapping"
+Provides-Extra: full
+Requires-Dist: arcgis-mapping; extra == "full"
+Requires-Dist: python-dotenv>=1.0; extra == "full"
+Dynamic: license-file
+
+## Install (local)
+
+```
+pip install --user .
+```
+
+### Install Options
+
+Minimal:
+
+```
+pip install age-oauth
+```
+
+With `arcgis-mapping` support:
+
+```
+pip install "age-oauth[mapping]"
+```
+
+Full install (with `arcgis-mapping` and `dotenv` convenience):
+
+```
+pip install "age-oauth[full]"
+```
+
+## Login (writes per-user token cache)
+
+```
+age-oauth --whoami
+```
+
+## Token management
+Token cache stored at `~/.arcgis/.env` (override with `ARCGIS_USER_ENV`)

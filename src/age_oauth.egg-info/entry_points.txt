@@ -1,0 +1,2 @@
+[console_scripts]
+age-oauth = age_oauth.cli:main
