@@ -16,7 +16,7 @@ import webbrowser
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from .envfile import load_env, read_env, set_env_key
+from .envfile import parse_env_file, set_env_key
 from .connections import ConnectionStore
 
 log = logging.getLogger("age_oauth")
@@ -81,24 +81,23 @@ class AGEOAuth:
         self.config = config
         self.env_path = str(Path(config.env_path).expanduser())
 
-        # Load env for this profile into os.environ (simple + consistent with current approach)
-        load_env(self.env_path)
+        env = parse_env_file(self.env_path)
+        
+        # verify can be bool or path
+        self.verify_ssl = _coerce_verify_ssl(env.get("OAUTH_VERIFY_SSL"), default=config.verify_ssl)
 
-        # Verify setting: bool or path
-        self.verify_ssl = _coerce_verify_ssl(os.getenv("OAUTH_VERIFY_SSL"), default=config.verify_ssl)
+        # config defaults
+        self.portal_url = (env.get("PORTAL_URL") or config.portal_url).rstrip("/")
+        self.client_id = env.get("OAUTH_CLIENT_ID") or config.client_id
+        self.client_secret = env.get("OAUTH_CLIENT_SECRET") or config.client_secret
+        self.redirect_uri = env.get("OAUTH_REDIRECT_URI") or config.redirect_uri
+        self.scope = env.get("OAUTH_SCOPE") or config.scope
 
-        # populate from env (with config defaults)
-        self.portal_url = os.getenv("PORTAL_URL", config.portal_url).rstrip("/")
-        self.client_id = os.getenv("OAUTH_CLIENT_ID", config.client_id)
-        self.client_secret = os.getenv("OAUTH_CLIENT_SECRET", config.client_secret)
-        self.redirect_uri = os.getenv("OAUTH_REDIRECT_URI", config.redirect_uri)
-        self.scope = os.getenv("OAUTH_SCOPE", config.scope)
-
-        # token state from env (won't be there on first run)
-        self._access_token = os.getenv("OAUTH_ACCESS_TOKEN", "")
-        self._refresh_token = os.getenv("OAUTH_REFRESH_TOKEN", "")
-        self._expires_at = float(os.getenv("OAUTH_TOKEN_EXPIRES_AT") or 0)
-        self._username = os.getenv("OAUTH_USERNAME", "")
+        # token state (won't be there on first run)
+        self._access_token = env.get("OAUTH_ACCESS_TOKEN", "")
+        self._refresh_token = env.get("OAUTH_REFRESH_TOKEN", "")
+        self._expires_at = float(env.get("OAUTH_TOKEN_EXPIRES_AT") or 0)
+        self._username = env.get("OAUTH_USERNAME", "")
 
         self.authorize_url = f"{self.portal_url}/sharing/rest/oauth2/authorize"
         self.token_url = f"{self.portal_url}/sharing/rest/oauth2/token"
@@ -171,7 +170,11 @@ class AGEOAuth:
     def _request_token(self, data: Dict[str, str]) -> None:
         resp = requests.post(self.token_url, data=data, timeout=30, verify=self.verify_ssl)
         if not resp.ok:
-            raise RuntimeError(f"Token endpoint error: {resp.status_code} {resp.text}")
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            raise RuntimeError(f"Token endpoint error: {resp.status_code} {detail}")
 
         payload = resp.json()
         self._access_token = payload["access_token"]
@@ -201,14 +204,16 @@ class AGEOAuth:
         def save(key: str, value: object) -> None:
             set_env_key(env_path, key, str(value))
 
-        # core (re-write, harmless)
+        # core
         save("PORTAL_URL", self.portal_url)
         save("OAUTH_CLIENT_ID", self.client_id)
         save("OAUTH_CLIENT_SECRET", self.client_secret)
 
-        env_verify = os.getenv("OAUTH_VERIFY_SSL", "").strip()
-        if env_verify:
-            save("OAUTH_VERIFY_SSL", env_verify)
+        v = self.verify_ssl
+        if isinstance(v, bool):
+            save("OAUTH_VERIFY_SSL", "true" if v else "false")
+        else:
+            save("OAUTH_VERIFY_SSL", str(Path(v).expanduser()))
 
         # token-ish
         save("OAUTH_REDIRECT_URI", self.redirect_uri)
@@ -248,7 +253,7 @@ def get_gis(
     env_file = store.env_path(cid)
 
     # quick read from env file, build OAuthConfig from those vals without modding os.environ
-    env = read_env(env_file)
+    env = parse_env_file(env_file)
 
     portal_url = (env.get("PORTAL_URL") or "").rstrip("/")
     client_id = env.get("OAUTH_CLIENT_ID") or ""
