@@ -116,10 +116,9 @@ def load_env(env_path: str) -> None:
         _load_env_fallback(env_path)
 
 
-def read_env(env_path: str | Path) -> Dict[str, str]:
+def parse_env_file(env_path: str | Path) -> Dict[str, str]:
     """
-    read env file into straight dict without modding os.environ
-    (for callers that need vals w/o side effects)
+    env file into dict (vals w/o side effects)
     """
     p = Path(env_path).expanduser()
     return _parse_env_file(p)
