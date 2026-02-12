@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import traceback
+
 from typing import Optional
 
 from .connections import ConnectionStore
@@ -63,7 +65,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     add = csub.add_parser("add", help="Add a new connection (prompts if args omitted)")
     add.add_argument("--label", help="Display label (e.g. 'Prod')")
     add.add_argument("--portal", help="Portal URL (e.g. https://host/portal)")
-    add.add_argument("--verify-ssl", default=None, help="true/false/path (default: true)")
+    add.add_argument("--verify-ssl", default="true", help="true/false/path (default: true)")
     add.add_argument("--client-id", default=None, help="OAuth client id")
     add.add_argument("--client-secret", default=None, help="OAuth client secret")
     add.add_argument("--no-active", action="store_true", help="Do not set as active connection")
@@ -80,9 +82,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # ---- auth commands ----
     login = sub.add_parser("login", help="Authenticate (interactive) and cache tokens")
     login.add_argument("--connection", default=None, help="Connection id or label")
+    login.add_argument("--connection-id", default=None, help="Explicit connection ID")
 
     whoami = sub.add_parser("whoami", help="Print authenticated username")
     whoami.add_argument("--connection", default=None, help="Connection id or label")
+    whoami.add_argument("--connection-id", default=None, help="Explicit connection ID")
 
     args = p.parse_args(argv)
 
@@ -96,6 +100,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.cmd == "connections":
             if args.connections_cmd == "info":
                 print(f"Store base: {store.base_dir()}")
+                log.info("Store base dir: %s", store.base_dir())
                 active = store.get_active()
                 default = store.get_default()
                 print(f"Active:     {active or ''}")
@@ -145,13 +150,17 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             if args.connections_cmd == "use":
                 cid = store.resolve(connection=args.selector)
+                log.info("Resolving connection selector: %r", args.selector)
                 store.set_active(cid)
+                log.info("Resolved connection id:%s", cid)
                 print(f"[OK] Active connection set: {cid}")
                 return 0
 
             if args.connections_cmd == "show":
                 selector = args.selector
+                log.info("Resolving connection selector: %r", args.selector)
                 cid = store.resolve(connection=selector) if selector else store.resolve()
+                log.info("Resolved connection id:%s", cid)
                 _print_connection(store, cid)
                 return 0
 
@@ -160,6 +169,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # ---- login / whoami ----
         if args.cmd in ("login", "whoami"):
             selector = getattr(args, "connection", None)
+            log.info("Resolving connection selector: %r", args.selector)
             # get_gis handles resolving + prompting via ConnectionStore mode.
             gis = get_gis(connection=selector) if selector else get_gis()
 
@@ -180,7 +190,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as ex:
         print(f"[ERROR] {ex}")
         if args.verbose:
-            raise
+            traceback.print_exc()
         return 1
 
 
