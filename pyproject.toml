@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "age-oauth"
+version = "0.1.0"
+description = "ArcGIS Enterprise OAuth helper with per user token cache."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "AGPL-3.0-or-later" }
+classifiers = [
+  "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
+authors = [{ name = "Talon5" }]
+dependencies = [
+  "requests>=2.31",
+  "platformdirs>=3.0",
+]
+
+[project.optional-dependencies]
+arcgis = ["arcgis"]
+dotenv = ["python-dotenv>=1.0"]
+mapping = ["arcgis-mapping"]
+full = [
+    "arcgis",
+    "arcgis-mapping",
+    "python-dotenv>=1.0"
+]
+
+[project.scripts]
+age-oauth = "age_oauth.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
