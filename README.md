@@ -1,160 +1,198 @@
 # age-oauth
 
-ArcGIS Enterprise OAuth helper with per-user, multi-portal credential and token cache
+`age-oauth` is a convenience package which makes it easier for script users to interact with an ArcGIS Enterprise by simplifying the OAuth 2.0 process, and eliminating the need (and bad security practice) of having to store username/passwords in your scripts.
 
-`age-oauth` lets you store OAuth client settings for multiple ArcGIS Enterprise portals, pick one by label or ID, and then
+## Install
 
-* authenticate interactively and cache tokens
-* create an `arcgis.gis.GIS` object programmatically using cached credentials
+There are three ways to install `age-oauth`:
 
-## Install (local)
+* Into an ArcGIS Pro Python environment [Internet-connected or disconnected]
+* Into a non-ArcGIS Pro Python environment [Internet-connected]
+* Into a non-ArcGIS Pro Python environment [Internet-disconnected]
 
-`pip install --user .`
+### ArcGIS Pro Python Environment
 
-## Install options
+Under Releases, grab the latest `.whl`.
 
-Minimal
+Sourcing ArcGIS Pro Python pip, do:
 
-`pip install age-oauth`
+`pip install <path to wheel file>` or `pip install --user <path to wheel file>`
 
-With ArcGIS support if it's not already there:
+### Non-ArcGIS Pro Python Environment (Internet)
 
-`pip install "age-oauth[arcgis]"`
+Under releases, grab the latest `.whl`.
 
-With arcgis-mapping support too:
+For full `arcgis` and `arcgis-mapping` support, do:
 
-`pip install "age-oauth[mapping]"`
+On **Windows**:
 
-With everything
+`python -m pip install "age-oauth[full] @ file:///C:/path/to/age_oauth-x.x.x-py3-none-any.whl`
 
-`pip install "age-oauth[full]"`
+**Mac/Linux**:
 
+Same as above just drop the drive letter
 
-## ArcGIS Pro desktop users
+### Non-ArcGIS Pro Python Environment (No Internet)
 
-If you're using the default `arcgispro-py3` environment that ships with ArcGIS Pro:
+Under releases, grab the latest `age_oauth_offline_<version>_win_amd64.zip`. Extract it somewhere convenient and make note of the location of the contained `/wheelhouse/` folder.
 
-**You must have an active ArcGIS Pro license session before using the `arcgis` Python API.**
+In the shell associated with your desired Python environment, do:
 
-This usually means launching ArcGIS Pro once and signing in before running `age-oauth` or other scripts that import `arcgis.gis`.
+`python -m pip install --no-index --find-links C:\Path\to\wheelhouse "age-oauth[full]"`
 
-This is a licensing requirement enforced by Esri and is not specific to `age-oauth`.
+## Usage
 
-## Authenticate (command line)
+### Step 0: Prereqs
 
-`age-oauth login`
+This README presumes you already have the needed permissions to have created a valid set of OAuth 2.0 app/developer tokens on a target ArcGIS Enterprise system. You should have ready:
 
-to verify:
+* the Portal root URL (e.g., `https://somwhere.com/portal`)
+* OAuth2 client ID
+* OAuth2 client secret
+* The app's Redirect URI set to `urn:ietf:wg:oauth:2.0:oob` (Esri's default out of band URI)
 
-`age-oauth whoami`
+### Step 1: Add a Portal to your local store
 
-## Token storage
+Run:
 
-Connection profiles and OAuth tokens are stored per-user under your OS config directory
-
-Windows:
-
-`%APPDATA%\age_oauth\`
-
-macOS/Linux:
-
-`~/.config/age_oauth/`
-
-Each saved connection contains a `.env` (OAuth settings and tokens), and a `.meta.json` (connection metadata)
-
-## How to...
-
-### Add a portal to your stash
-
-Interactively (recommended):
-
-`age-oauth connections add`
-
-You will be prompted for:
-
-* Connection label (short human readable name for the portal, e.g. `prod`)
-* Portal URL (e.g., `https://mydomain.com/portal`)
-* Verify SSL (`true`, `false`, or a path to a custom CA bundle)
-* OAuth client ID
-* OAuth client secret
-
-The script will then guide you through a browser confirmation to obtain an authorization code, and proceed.
-
-To list connections:
-
-`age-oauth connections list`
-
-To set an active connection:
-
-`age-oauth connections use prod` (or use the connection id in `connections list`)
-
-### Log in to a specific portal from the command line
-
-Login to the active/default portal:
-
-`age-oauth login`
-
-Login to specific portal by label or id:
-
-`age-oauth login --connection prod`
-
-Confirm which user you're authenticated as:
-
-`age-oauth whoami --connection prod`
-
-### Use get_gis() programmatically in a script
-
-Minimal example:
-
+```powershell
+age-oauth connections add
 ```
+
+You'll be prompted for the following:
+
+```powershell
+Connection label:        <short, plain language name to identify portal, no spaces>
+Portal URL:              https://somewhere.com/portal
+Verify SSL:              false, true, or path to custom CA cert
+OAuth Client ID:         <your client ID>
+OAuth Client Secret:     <your client secret>
+```
+
+When it's done, you'll see:
+
+```powershell
+[OK] Created connection: my_portal
+```
+
+### Step 2: Authenticate / Onboard
+
+Now we'll authenticate for the first time (interactively, from CLI)
+
+```powershell
+age-oauth login --connection my_portal
+```
+
+You'll see:
+
+```powershell
+Opening browser for ArcGIS Enterprise OAuth sign-in...
+```
+
+A browser will open to your Portal login screen. You need to:
+
+1. Sign in
+2. Portal displays an authorization code
+3. Copy the code
+4. Paste it back into the terminal where you are being prompted for it
+
+`age-oauth` will swap the authorization code for an **access token**, a **refresh token**, and an **expiration timestamp**. This is then securely stored in your user profile. If all is successful, you'll see:
+
+```powershell
+New access_token acquired!  Expires in: 1:00:00
+Token is for user: your.username
+```
+
+### Step 3: Confirm authentication
+
+To verify, do:
+
+```powershell
+age-oauth whoami --connection my_portal
+```
+
+You should see:
+
+```powershell
+your.username
+```
+
+Your OAuth credentials are now onboarded and you can proceed to use it programmatically.
+
+### Step 4: Programmatic use
+
+Now, you can use it in Python:
+
+```python
 from age_oauth import get_gis
 
-# uses active/default connection resolution rules
-gis = get_gis()
+gis = get_gis(connection="my_portal")
 
+# verify
 print(gis.properties.portalName)
 print(gis.users.me.username)
 ```
 
-Select a specific portal by label (or connection id):
+No username/passwords, no tokens, no PKI decryption in your scripts. `age-oauth` handles negotiation and refresh automatically.
+
+## Storage
+
+Portal profiles are stored per-user under your OS home (profile) directory. Nothing is stored globally:
+
+Windows
 
 ```
-from age_oauth import get_gis
-
-gis = get_gis(connection="prod")
-print(gis.users.me.username)
+%APPDATA%\age_oauth\
 ```
 
-If you want scripts to fail fast with no interactive prompts:
+Each connection contains the following:
 
 ```
-from age_oauth import get_gis
-
-# will raise if the connection is missing required settings instead of prompting
-gis = get_gis(connection="prod", prompt_if_missing=False)
+connections/
+    my_portal_<uuid>/
+        .env         # OAuth settings and tokens
+        meta.json    # metadata
 ```
 
-### Connection selection rules
+## Why does this exist?
 
-when you call `get_gis()` (or use CLI with `--connection`), `age-oauth` resolves which portal to use in the following order:
+It is tempting to write scripts like:
 
-1. explicit `connection_id`
-2. connection selector
-    * exact ID match, else
-    * exact label match, else
-    * unique id prefix match
-3. active connection
-4. default connection
-5. if there's only one connection, use that
+```python
+gis = GIS("https://my-portal.com/portal", "username", "password")
 
-### SSL verification stuff
+# or
 
-`OAUTH_VERIFY_SSL` (or CLI with `--verify-ssl`) supports...
+gis = GIS("https://my-portal.com/portal", token="abcdef12345abcdef12345abcdef...")
+```
 
-* `true`
-* `false`
-* `/path/to/custom/cert authority bundle`
+Or do any number of other sketchy things like -
 
-### License
+* usernames/passwords in `.py` or sidecar files
+* decrypt PKI client certs into unencrypted, plain-text `.pem` files
+* copy static access tokens from a browser
+* paste your API keys right into scripts
 
-AGPL-3.0-or-later
+All of these practices create both security and maintainability problems, with compromise at worst and increased technical debt at best. In a secure setting, we're going for:
+
+* credentials that can be revoked
+* clear ownership of access
+* clear expiration policy
+* centralized control
+
+This is exactly what the OAuth workflow gives you when it's properly used. You have to authenticate via Portal. A short-lived `access_token` is issued (expiration and rotation policy). A longer-lived `refresh_token` can renew access automatically once the "app" is authorized. These tokens can then be revoked via Portal (centralization). So while nothing's perfect, this workflow aligns much better with typical enterprise security expectations.
+
+`age-oauth` is designed to make the more secure way also the more convenient way. It will give you:
+
+* A per-user connection store to manage multiple Portal connections
+* OAuth client configuration per Portal
+* Automatic token refresh
+* A simple, injected `arcgis.gis.GIS` class object instantiated via `age_oauth.get_gis()`
+
+### But why not just use API keys?
+
+ArcGIS Enterprise developer API keys are useful, but they have short lifetimes and require manual renewal. This introduces friction into automations you may need to run under your human-user persona. OAuth supports refresh tokens that can be reused indefinitely to get new access tokens. Going through the up-front setup to establish OAuth client access pays off in the long run by giving you way cleaner scripts that are:
+
+* more easily maintained,
+* can be passed around without fear of accidentally leaking credentials,
+* better aligned with enterprise security and therefore help everyone sleep better at night.
