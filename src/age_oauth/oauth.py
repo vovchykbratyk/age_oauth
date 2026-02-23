@@ -66,7 +66,7 @@ class OAuthConfig:
     env_path: str
     redirect_uri: str = "urn:ietf:wg:oauth:2.0:oob"
     scope: str = "portal:user:read,portal:item:read,portal:group:read"
-    verify_ssl: bool = True
+    verify_ssl: bool = False
 
 
 class AGEOAuth:
