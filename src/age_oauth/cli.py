@@ -19,6 +19,12 @@ def _prompt(label: str, *, default: Optional[str] = None, secret: bool = False) 
     while True:
         if secret:
             v = getpass.getpass(f"{label}{suffix}: ").strip()
+
+            if v:
+                print(f"[OK] {label} captured ({len(v)} characters).")
+            else:
+                pass
+            
         else:
             v = input(f"{label}{suffix}: ").strip()
         if v:
@@ -150,7 +156,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             if args.connections_cmd == "use":
                 cid = store.resolve(connection=args.selector)
-                log.info("Resolving connection selector: %r", args.selector)
+                log.info("Resolving connection selector: %r", selector)
                 store.set_active(cid)
                 log.info("Resolved connection id:%s", cid)
                 print(f"[OK] Active connection set: {cid}")
@@ -169,9 +175,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         # ---- login / whoami ----
         if args.cmd in ("login", "whoami"):
             selector = getattr(args, "connection", None)
-            log.info("Resolving connection selector: %r", args.selector)
-            # get_gis handles resolving + prompting via ConnectionStore mode.
-            gis = get_gis(connection=selector) if selector else get_gis()
+            connection_id = getattr(args, "connection_id", None)
+
+            log.info(
+                "Resolving connection (connection=%r, connection_id=%r)",
+                selector,
+                connection_id,
+            )
+
+            # get_gis handles resolution and prompting thru ConnectionStore
+            # PRECEDENCE:
+            # 1-connection_id
+            # 2-connection selector
+            # 3-active
+            # 4-default
+            # 5-only one connector present
+            if selector or connection_id:
+                gis = get_gis(connection=selector, connection_id=connection_id)
+            else:
+                gis = get_gis()
 
             if args.cmd == "whoami":
                 me = gis.users.me
