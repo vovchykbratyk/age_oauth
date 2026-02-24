@@ -75,6 +75,19 @@ When it's done, you'll see:
 [OK] Created connection: my_portal
 ```
 
+#### Step 1.a: Add the Portal non-interactively
+
+You can also add the Portal non-interactively.  Assuming a PowerShell environment:
+
+```powershell
+age-oauth connections add `
+  --label "Prod" `
+  --portal "https://somewhere.com/portal" `
+  --verify-ssl false `
+  --client-id "client_id_value" `
+  --client-secret "client_secret_value"
+```
+
 ### Step 2: Authenticate / Onboard
 
 Now we'll authenticate for the first time (interactively, from CLI)
