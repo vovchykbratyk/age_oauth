@@ -416,7 +416,7 @@ class ConnectionStore:
         if idx.get("default_connection_id") == cid:
             idx["default_connection_id"] = None
 
-        self._save_index()
+        self._save_index(idx)
 
         # fix active, if that's the one we're dropping
         active = self.get_active()
