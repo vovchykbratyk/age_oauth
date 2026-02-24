@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import logging
 import sys
 import traceback
@@ -10,6 +11,19 @@ from typing import Optional
 
 from .connections import ConnectionStore
 from .oauth import get_gis
+
+
+def _pkg_version() -> str:
+    """
+    returns installed package version (falls back smoothly in dev configs)
+    """
+    for name in ("age-oauth", "age_oauth"):
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return "0+unknown"
+
 
 
 def _prompt(label: str, *, default: Optional[str] = None, secret: bool = False) -> str:
@@ -76,6 +90,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
 
     p = argparse.ArgumentParser(prog="age-oauth")
+    p.add_argument("--version", action="version", version=f"age-oauth {_pkg_version()}")
     p.add_argument("-v", "--verbose", action="store_true", help="Enable info logging")
 
     sub = p.add_subparsers(dest="cmd", required=True)
