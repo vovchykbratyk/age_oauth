@@ -5,6 +5,8 @@ import json
 import os
 import re
 import hashlib
+import shutil
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -397,6 +399,60 @@ class ConnectionStore:
             self.set_default(cid)
 
         return cid
+    
+    def delete(self, *, connection: Optional[str] = None, connection_id: Optional[str] = None) -> str:
+        """
+        Deletes a single connection by selector or ID.  Returns resolved connection_id
+        that was deleted.
+        """
+        cid = self.resolve(connection=connection, connection_id=connection_id)
+
+        # remove it from the index
+        idx = self._load_index()
+        conns = idx.get("connections", [])
+        idx["connections"] = [c for c in conns if c.get("id") != cid]
+
+        # fix default if that's the one we're dropping
+        if idx.get("default_connection_id") == cid:
+            idx["default_connection_id"] = None
+
+        self._save_index()
+
+        # fix active, if that's the one we're dropping
+        active = self.get_active()
+        if active == cid:
+            try:
+                self.active_path().unlink(missing_ok=True)
+            except TypeError:
+                # this is just for old python < 3.8
+                p = self.active_path()
+                if p.exists():
+                    p.unlink()
+
+        # remove the folder from disk
+        cdir = self.conn_dir(cid)
+        if cdir.exists():
+            shutil.rmtree(cdir, ignore_errors=False)
+
+        return cid
+    
+    def reset_all(self) -> None:
+        """
+        nuke the entire store, removing all connections (fresh install state)
+        """
+        base = self.base_dir()
+
+        # remove connections directory
+        cdir = self.connections_dir()
+        if cdir.exists():
+            shutil.rmtree(cdir, ignore_errors=False)
+
+        # remove the index and active pointer
+        ip = self.index_path()
+        ap = self.active_path()
+        for p in (ip, ap):
+            if p.exists():
+                p.unlink()
 
     def load_meta(self, connection_id: str, *, allow_missing: bool = False) -> Optional[ConnectionMeta]:
         p = self.meta_path(connection_id)
