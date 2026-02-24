@@ -4,41 +4,23 @@
 
 ## Install
 
-There are three ways to install `age-oauth`:
+**NOTE**: You must have `arcgis` installed in your desired Python environment.  If you want the full capabilities of ArcGIS API for Python, go ahead and install `arcgis-mapping` too.  If you're working with ArcGIS Pro, these are already available to you in `arcgispro-py3` and any cloned environments.  Otherwise grab them from either Esri's conda channel (recommended):
 
-* Into an ArcGIS Pro Python environment [Internet-connected or disconnected]
-* Into a non-ArcGIS Pro Python environment [Internet-connected]
-* Into a non-ArcGIS Pro Python environment [Internet-disconnected]
+```
+conda install -c esri arcgis arcgis-mapping
+```
+or pip:
 
-### ArcGIS Pro Python Environment
+```
+pip install arcgis arcgis-mapping
+```
 
-Under Releases, grab the latest `.whl`.
+Then [Grab the latest `.whl`.](/owner/repo/releases/latest)
 
-Sourcing ArcGIS Pro Python pip, do:
+In your desired Python environment, do:
 
 `pip install <path to wheel file>` or `pip install --user <path to wheel file>`
 
-### Non-ArcGIS Pro Python Environment (Internet)
-
-Under releases, grab the latest `.whl`.
-
-For full `arcgis` and `arcgis-mapping` support, do:
-
-On **Windows**:
-
-`python -m pip install "age-oauth[full] @ file:///C:/path/to/age_oauth-x.x.x-py3-none-any.whl`
-
-**Mac/Linux**:
-
-Same as above just drop the drive letter
-
-### Non-ArcGIS Pro Python Environment (No Internet)
-
-Under releases, grab the latest `age_oauth_offline_<version>_win_amd64.zip`. Extract it somewhere convenient and make note of the location of the contained `/wheelhouse/` folder.
-
-In the shell associated with your desired Python environment, do:
-
-`python -m pip install --no-index --find-links C:\Path\to\wheelhouse "age-oauth[full]"`
 
 ## Usage
 
