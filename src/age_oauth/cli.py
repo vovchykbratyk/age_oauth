@@ -24,7 +24,7 @@ def _prompt(label: str, *, default: Optional[str] = None, secret: bool = False) 
                 print(f"[OK] {label} captured ({len(v)} characters).")
             else:
                 pass
-            
+
         else:
             v = input(f"{label}{suffix}: ").strip()
         if v:
@@ -32,6 +32,24 @@ def _prompt(label: str, *, default: Optional[str] = None, secret: bool = False) 
         if default is not None:
             return default
         print("Value is required.")
+
+
+def _confirm(prompt: str, *, default_no: bool = True) -> bool:
+    """
+    return True if the user confirms
+    """
+    suffix = " [y/N]: " if default_no else " [Y/n]: "
+    ans = input(prompt + suffix).strip().lower()
+    if not ans:
+        return not default_no
+    return ans in ("y", "yes")
+
+
+def _confirm_delete_all() -> bool:
+    print("[WARN] This action will delete ALL connections and reset age-oauth to a fresh install state.")
+    print("[WARN] This cannot be undone.")
+    token = input("Type DELETE to confirm: ").strip()
+    return token == "DELETE"
 
 
 def _print_connection(store: ConnectionStore, cid: str) -> None:
@@ -84,6 +102,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     show.add_argument("selector", nargs="?", help="Connection id or label (default: active/default)")
 
     info = csub.add_parser("info", help="Show store location and current selection")
+
+    rm = csub.add_parser("remove", help="Remove a connection, or reset all connections")
+    rm.add_argument("selector", nargs="?", help="Connection id or label (or unique id prefix)")
+    rm.add_argument("--all", action="store_true", help="Remove ALL connections and reset store")
 
     # ---- auth commands ----
     login = sub.add_parser("login", help="Authenticate (interactive) and cache tokens")
@@ -169,6 +191,45 @@ def main(argv: Optional[list[str]] = None) -> int:
                 log.info("Resolved connection id:%s", cid)
                 _print_connection(store, cid)
                 return 0
+            
+            if args.connections_cmd == "remove":
+                if args.all:
+                    if args.selector:
+                        raise RuntimeError("Do not provide a selector when using --all.")
+                    if not _confirm_delete_all():
+                        print("[ABORTED] No changes made.")
+                        return 1
+                    
+                    store.reset_all()
+                    print("[OK] All connections removed and store reset.")
+                    return 0
+                
+                # single remove
+                if not args.selector:
+                    raise RuntimeError("Missing selector.  Use: age-oauth connections remove <id|label> OR --all")
+                
+                # resolve and show what is going to be deleted
+                cid = store.resolve(connection=args.selector)
+                meta = store.load_meta(cid, allow_missing=True)
+
+                label = getattr(meta, "label", "") if meta else ""
+                portal = getattr(meta, "portal_url", "") if meta else ""
+
+                print("You are about to delete this connection:")
+                print(f"\tID:\t\t{cid}")
+                if label:
+                    print(f"\tLabel:\t\t{label}")
+                if portal:
+                    print(f"\tPortal:\t\t{portal}")
+
+                if not _confirm("Are you sure you want to delete this connection?", default_no=True):
+                    print("[ABORTED] No changes made.")
+                    return 1
+                
+                deleted = store.delete(connection_id=cid)
+                print(f"[OK] Deleted connection: {deleted}")
+                return 0
+
 
             raise RuntimeError("Unhandled connections subcommand")
 
