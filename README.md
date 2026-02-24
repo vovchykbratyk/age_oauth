@@ -43,7 +43,7 @@ age-oauth connections add
 
 You'll be prompted for the following:
 
-```powershell
+```text
 Connection label:        <short, plain language name to identify portal, no spaces>
 Portal URL:              https://somewhere.com/portal
 Verify SSL:              false, true, or path to custom CA cert
