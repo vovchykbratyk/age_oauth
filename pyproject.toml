@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "age-oauth"
-version = "0.1.1"
+version = "0.1.2"
 description = "ArcGIS Enterprise OAuth helper with per user token cache."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE*"]
-classifiers = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
 authors = [{ name = "Eric Eagle" }]
 dependencies = [
   "requests>=2.31",
