@@ -4,22 +4,17 @@
 
 ## Install
 
-**NOTE**: You must have `arcgis` installed in your desired Python environment.  If you want the full capabilities of ArcGIS API for Python, go ahead and install `arcgis-mapping` too.  If you're working with ArcGIS Pro, these are already available to you in `arcgispro-py3` and any cloned environments.  Otherwise grab them from either Esri's conda channel (recommended):
+Minimal (fine if you're installing into an ArcGIS Pro conda environment, e.g. `arcgispro-py3` or clones):
 
 ```
-conda install -c esri arcgis arcgis-mapping
-```
-or pip:
-
-```
-pip install arcgis arcgis-mapping
+python -m pip install age-oauth
 ```
 
-Then [Grab the latest `.whl`.](/owner/repo/releases/latest)
+Full dependencies (installs `arcgis` and `arcgis-mapping`):
 
-In your desired Python environment, do:
-
-`pip install <path to wheel file>` or `pip install --user <path to wheel file>`
+```
+python -m pip install "age-oauth[full]"
+```
 
 
 ## Usage
