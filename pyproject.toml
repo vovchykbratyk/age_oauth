@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "age-oauth"
-version = "0.1.6"
+version = "0.1.7"
 description = "ArcGIS Enterprise OAuth helper with per user token cache."
 readme = "README.md"
 requires-python = ">=3.9"
