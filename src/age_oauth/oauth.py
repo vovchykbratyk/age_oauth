@@ -183,6 +183,11 @@ class AGEOAuth:
 
         if "refresh_token" in payload:
             self._refresh_token = payload["refresh_token"]
+            now_epoch = time.time()
+            set_env_key(self.env_path, "OAUTH_REFRESH_TOKEN_ROTATED_AT", str(now_epoch))
+            iso_now = datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat()
+            set_env_key(self.env_path, "OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC", iso_now)
+            
         if "username" in payload:
             self._username = payload["username"]
         if "scope" in payload:
