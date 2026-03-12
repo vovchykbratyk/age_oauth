@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
@@ -187,9 +187,20 @@ class AGEOAuth:
             set_env_key(self.env_path, "OAUTH_REFRESH_TOKEN_ROTATED_AT", str(now_epoch))
             iso_now = datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat()
             set_env_key(self.env_path, "OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC", iso_now)
-            
+
         if "username" in payload:
             self._username = payload["username"]
+            if not self._username:
+                try:
+                    url = f"{self.portal_url}/sharing/rest/community/self"
+                    params = {"f": "json", "token": self._access_token}
+                    who = requests.get(url, params=params, timeout=30, verify=self.verify_ssl)
+                    if who.ok:
+                        info = who.json()
+                        self._username = (info.get("username") or "").strip()
+                except Exception as ex:
+                    log.warning("Unable to backfill username from community/self: %r", ex)
+                    
         if "scope" in payload:
             self.scope = payload["scope"]
 
@@ -230,6 +241,121 @@ class AGEOAuth:
         save("OAUTH_TOKEN_EXPIRES_AT_UTC", iso_expiration)
         if self._username:
             save("OAUTH_USERNAME", self._username)
+
+
+def resolve_live_username(
+    gis,
+    *,
+    connection: str | None = None,
+    connection_id: str | None = None,
+) -> tuple[str | None, str, str | None]:
+    
+    """
+    resolve the username from a gis object, then REST community/self endpoint,
+    then look in .env for cached value or give up and return 'unknown'
+    """
+    # first try to get it from the gis object
+    try:
+        me = gis.users.me
+        username = getattr(me, "username", None)
+        if username:
+            return username, "gis.users.me", None
+    except Exception as ex:
+        log.warning("gis.users.me lookup failed: %r", ex)
+
+    # direct portal rest try
+    try:
+        username = get_username_via_rest(
+            connection=connection,
+            connection_id=connection_id,
+            prompt_if_missing=False,
+        )
+        if username:
+            return (
+                username,
+                "community/self",
+                "ArcGIS Python API did not populate gis.users.me.username; "
+                "identity was discovered via direct REST call using current token",
+            )
+    except Exception as ex:
+        log.warning("community/self lookup failed: %r", ex)
+
+    # see if there's a cached value
+    try:
+        store = ConnectionStore()
+        cid = store.resolve(connection=connection, connection_id=connection_id)
+        env = parse_env_file(store.env_path(cid))
+        username = (env.get("OAUTH_USERNAME") or "").strip()
+        if username:
+            return (
+                f"{username} [CACHED]",
+                "env",
+                "Live identity lookup failed. Could only get cached OAUTH_USERNAME from connection profile. "
+                "The current GIS object/session may not be healthy. If issues persist, remove and re-add the "
+                "connection and log in again."
+            )
+    except Exception as ex:
+        log.warning("env username fallback failed: %r", ex)
+
+    return None, "unknown", "Unable to determine username from either live GIS state or cached profile."
+
+
+def get_username_via_rest(
+    *,
+    connection: str | None = None,
+    connection_id: str | None = None,
+    prompt_if_missing: bool = True,
+) -> str | None:
+    """
+    Resolve the saved connection, make sure a live access token exists,
+    and get the current user from portal via REST (outside API wrapper)
+    """
+    
+    store = ConnectionStore()
+    cid = store.resolve(connection=connection, connection_id=connection_id)
+
+    if prompt_if_missing:
+        store.ensure_ready(cid, prompt=True)
+    else:
+        store.ensure_ready(cid, prompt=False)
+
+    env_file = store.env_path(cid)
+    env = parse_env_file(env_file)
+
+    portal_url = (env.get("PORTAL_URL") or "").rstrip("/")
+    client_id = env.get("OAUTH_CLIENT_ID") or ""
+    client_secret = env.get("OAUTH_CLIENT_SECRET") or ""
+    if not portal_url or not client_id or not client_secret:
+        raise RuntimeError(f"Core OAuth settings incomplete for connection: {cid}")
+
+    cfg = OAuthConfig(
+        portal_url=portal_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        env_path=str(env_file),
+    )
+    auth = AGEOAuth(cfg)
+
+    url = f"{auth.portal_url}/sharing/rest/community/self"
+    params = {
+        "f": "json",
+        "token": auth.access_token,
+    }
+
+    resp = requests.get(url, params=params, timeout=30, verify=auth.verify_ssl)
+    if not resp.ok:
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        raise RuntimeError(f"community/self lookup failed: {resp.status_code} {detail}")
+
+    payload = resp.json()
+    if "error" in payload:
+        raise RuntimeError(f"community/self returned error: {payload['error']}")
+
+    username = (payload.get("username") or "").strip()
+    return username or None
 
 
 def get_gis(
