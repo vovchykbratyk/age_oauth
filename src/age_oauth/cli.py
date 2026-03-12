@@ -11,6 +11,7 @@ from typing import Optional
 
 from .connections import ConnectionStore
 from .oauth import get_gis
+from .tokens import maybe_rotate_refresh_token
 
 
 def _pkg_version() -> str:
@@ -131,6 +132,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     whoami.add_argument("--connection", default=None, help="Connection id or label")
     whoami.add_argument("--connection-id", default=None, help="Explicit connection ID")
 
+    token = sub.add_parser("token", help="Token maintenance operations")
+    token.add_argument("--rotate-refresh-token", action="store_true", help="Rotate refresh token if older than threshold")
+    token.add_argument("--portal", default=None, help="Portal label/ID selector (defaults to active/default connection)")
+
     args = p.parse_args(argv)
 
     level = logging.INFO if args.verbose else logging.WARNING
@@ -193,7 +198,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             if args.connections_cmd == "use":
                 cid = store.resolve(connection=args.selector)
-                log.info("Resolving connection selector: %r", selector)
+                log.info("Resolving connection selector: %r", args.selector)
                 store.set_active(cid)
                 log.info("Resolved connection id:%s", cid)
                 print(f"[OK] Active connection set: {cid}")
@@ -278,6 +283,29 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             # login
             print("[OK] GIS object created.")
+            return 0
+        
+        if args.cmd == "token":
+            if not args.rotate_refresh_token:
+                raise RuntimeError("No token action specified.")
+            
+            result = maybe_rotate_refresh_token(connection=args.portal, max_age_days=3)
+
+            print(f"Connection:  {result.connection_id}")
+            print(f"Portal:      {result.portal_url}")
+            if result.username:
+                print(f"User:        {result.username}")
+            
+            if result.refresh_token_age_seconds is None:
+                print("Token age:    unknown (no prior rotation timestamp stored)")
+            else:
+                print(f"Token age:    {result.refresh_token_age_seconds:.0f} seconds")
+
+            if result.rotated:
+                print("[OK] Refresh token rotated successfully")
+            else:
+                print(f"[OK] No rotation needed. {result.reason}")
+
             return 0
 
         raise RuntimeError("Unhandled command")
