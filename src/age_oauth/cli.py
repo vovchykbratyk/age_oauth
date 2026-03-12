@@ -10,7 +10,7 @@ import traceback
 from typing import Optional
 
 from .connections import ConnectionStore
-from .oauth import get_gis
+from .oauth import get_gis, resolve_live_username
 from .tokens import maybe_rotate_refresh_token
 
 
@@ -277,9 +277,39 @@ def main(argv: Optional[list[str]] = None) -> int:
                 gis = get_gis()
 
             if args.cmd == "whoami":
-                me = gis.users.me
-                print(getattr(me, "username", None) or "unknown")
-                return 0
+                selector = args.connection
+                connection_id = args.connection_id
+
+                log.info(
+                    "resolving connection (connection=%r, connection_id=%r)",
+                    selector,
+                    connection_id
+                )
+
+                gis = get_gis(
+                    connection=selector,
+                    connection_id=connection_id,
+                    prompt_if_missing=True,
+                )
+
+                username, source, warning = resolve_live_username(
+                    gis,
+                    connection=selector,
+                    connection_id=connection_id,
+                )
+
+                print(username or "unknown")
+
+                if warning:
+                    level = "WARN" if source in ("community/self", "env") else "ERROR"
+                    print(f"[{level}] {warning}", file=sys.stderr)
+
+                if source in ("gis.users.me", "community/self"):
+                    return 0
+                
+                if source == "env":
+                    return 2
+                return 1
 
             # login
             print("[OK] GIS object created.")
