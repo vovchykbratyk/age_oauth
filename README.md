@@ -122,8 +122,19 @@ gis = get_gis(connection="my_portal")
 print(gis.properties.portalName)
 print(gis.users.me.username)
 ```
-
 No username/passwords, no tokens, no PKI decryption in your scripts. `age-oauth` handles negotiation and refresh automatically.
+
+
+### Rotation of refresh_token
+
+While calling the library programmatically will automatically update the `refresh_token` associated with the active connection automatically (3 day duration), users or admins can also call it interactively.
+
+```
+age-oauth token --rotate-refresh-token --portal <portal label>
+```
+
+If the `refresh_token` is still good, the command does nothing.
+
 
 ## Storage
 
