@@ -58,6 +58,48 @@ def _coerce_verify_ssl(env_value: str | None, default: bool = True) -> bool | st
     )
 
 
+def _rotate_refresh_token_if_needed(
+    *,
+    connection: str | None = None,
+    connection_id: str | None = None,
+    max_age_days: int = 3,
+) -> None:
+    """
+    best effort non-interactive rotation of refresh_token
+    intention is to keep long running tasks alive
+    """
+    try:
+        from .tokens import maybe_rotate_refresh_token
+
+        result = maybe_rotate_refresh_token(
+            connection=connection,
+            connection_id=connection_id,
+            max_age_days=max_age_days,
+        )
+
+        if result.rotated:
+            log.info(
+                "Refresh token rotated for connection=%s portal=%s",
+                result.connection_id,
+                result.portal_url
+            )
+        else:
+            log.info(
+                "Refresh token rotation not needed for connection=%s: %s",
+                result.connection_id,
+                result.reason,
+            )
+    except RuntimeError as ex:
+        # handle normal edge cases here
+        # - no refresh token yet because user hasn't logged in,
+        # - connection isn't ready,
+        # - portal rejected the exchange for some reason
+        log.warning("Refresh-token rotation skipped: %r", ex)
+
+    except Exception as ex:
+        # just some defensive architecture here, avoid a botched rotation taking down get_gis()
+        log.warning("Unexpected refresh-token rotation failure: %r", ex)
+
 @dataclass
 class OAuthConfig:
     portal_url: str
@@ -66,7 +108,7 @@ class OAuthConfig:
     env_path: str
     redirect_uri: str = "urn:ietf:wg:oauth:2.0:oob"
     scope: str = "portal:user:read,portal:item:read,portal:group:read"
-    verify_ssl: bool = False
+    verify_ssl: bool | str = False
 
 
 class AGEOAuth:
@@ -163,11 +205,14 @@ class AGEOAuth:
             "client_secret": self.client_secret,
             "grant_type": "refresh_token",
             "refresh_token": self._refresh_token,
+            "redirect_uri": self.redirect_uri,
         }
         print("Refreshing access token using refresh_token...")
         self._request_token(data)
 
     def _request_token(self, data: Dict[str, str]) -> None:
+        data = dict(data)
+        data["f"] = "json"
         resp = requests.post(self.token_url, data=data, timeout=30, verify=self.verify_ssl)
         if not resp.ok:
             try:
@@ -177,6 +222,9 @@ class AGEOAuth:
             raise RuntimeError(f"Token endpoint error: {resp.status_code} {detail}")
 
         payload = resp.json()
+        if "error" in payload:
+            raise RuntimeError(f"Token endpoint returned error: {payload['error']}")
+        
         self._access_token = payload["access_token"]
         expires_in = float(payload.get("expires_in", 3600))
         self._expires_at = time.time() + expires_in
@@ -188,18 +236,17 @@ class AGEOAuth:
             iso_now = datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat()
             set_env_key(self.env_path, "OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC", iso_now)
 
-        if "username" in payload:
-            self._username = payload["username"]
-            if not self._username:
-                try:
-                    url = f"{self.portal_url}/sharing/rest/community/self"
-                    params = {"f": "json", "token": self._access_token}
-                    who = requests.get(url, params=params, timeout=30, verify=self.verify_ssl)
-                    if who.ok:
-                        info = who.json()
-                        self._username = (info.get("username") or "").strip()
-                except Exception as ex:
-                    log.warning("Unable to backfill username from community/self: %r", ex)
+        self._username = payload.get("username", "") or ""
+        if not self._username:
+            try:
+                url = f"{self.portal_url}/sharing/rest/community/self"
+                params = {"f": "json", "token": self._access_token}
+                who = requests.get(url, params=params, timeout=30, verify=self.verify_ssl)
+                if who.ok:
+                    info = who.json()
+                    self._username = (info.get("username") or "").strip()
+            except Exception as ex:
+                log.warning("Unable to backfill username from community/self: %r", ex)
                     
         if "scope" in payload:
             self.scope = payload["scope"]
@@ -257,7 +304,7 @@ def resolve_live_username(
     # first try to get it from the gis object
     try:
         me = gis.users.me
-        username = getattr(me, "username", None)
+        username = (getattr(me, "username", None) or "").strip()
         if username:
             return username, "gis.users.me", None
     except Exception as ex:
@@ -320,6 +367,13 @@ def get_username_via_rest(
         store.ensure_ready(cid, prompt=False)
 
     env_file = store.env_path(cid)
+    # pester the request_token for rotation if it needs it
+    _rotate_refresh_token_if_needed(
+        connection=connection,
+        connection_id=connection_id,
+        max_age_days=3,
+    )
+
     env = parse_env_file(env_file)
 
     portal_url = (env.get("PORTAL_URL") or "").rstrip("/")
@@ -383,6 +437,13 @@ def get_gis(
 
     env_file = store.env_path(cid)
 
+    # do a quick best-effort refresh_token rotation
+    _rotate_refresh_token_if_needed(
+        connection=connection,
+        connection_id=connection_id,
+        max_age_days=3,
+    )
+
     # quick read from env file, build OAuthConfig from those vals without modding os.environ
     env = parse_env_file(env_file)
 
@@ -400,8 +461,6 @@ def get_gis(
     )
     auth = AGEOAuth(cfg)
 
-    store.touch(cid)
-
     # GIS SSL handling: verify_cert bool + ca_bundles path when needed
     gis_kwargs = {}
     v = auth.verify_ssl
@@ -412,4 +471,6 @@ def get_gis(
         gis_verify = True
         gis_kwargs["ca_bundles"] = ca_path
 
-    return GIS(auth.portal_url, token=auth.access_token, verify_cert=gis_verify, **gis_kwargs)
+    gis = GIS(auth.portal_url, token=auth.access_token, verify_cert=gis_verify, **gis_kwargs)
+    store.touch(cid)
+    return gis
