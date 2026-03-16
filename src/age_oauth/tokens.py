@@ -20,9 +20,6 @@ def _utc_now_epoch() -> float:
     return time.time()
 
 
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
 def _to_readable_time(total_seconds: float) -> str:
     try:
         if total_seconds < 0:
