@@ -18,6 +18,23 @@ from .envfile import parse_env_file, set_env_key
 
 # core keys for usable Enterprise connection profile
 _REQUIRED_KEYS = ("PORTAL_URL", "OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET")
+_VALID_AUTH_TYPES = {"user", "app"}
+
+
+def _normalize_auth_type(value: str | None) -> str:
+    """
+    Normalized connection authentication mode
+    Existing/legacy connections default to user authentication
+    """
+    auth_type = (value or "user").strip().lower()
+
+    if auth_type not in _VALID_AUTH_TYPES:
+        raise ValueError(
+            f"Invalid auth type {value!r}."
+            f"Expected one of: {', '.join(sorted(_VALID_AUTH_TYPES))}"
+        )
+
+    return auth_type
 
 
 def _utc_now_iso() -> str:
@@ -102,6 +119,8 @@ class ConnectionMeta:
     tags: List[str] = field(default_factory=list)
     verify_ssl: bool = True
     ca_bundle: Optional[str] = None
+    auth_type: str = "user"
+    referer: Optional[str] = None
 
 
 class ConnectionStore:
@@ -215,6 +234,8 @@ class ConnectionStore:
                         tags=list(c.get("tags") or []),
                         verify_ssl=bool(c.get("verify_ssl", True)),
                         ca_bundle=c.get("ca_bundle"),
+                        auth_type=_normalize_auth_type(c.get("auth_type")),
+                        referer=(c.get("referer") or "").strip() or None
                     )
                 )
             else:
@@ -312,16 +333,20 @@ class ConnectionStore:
         portal_url: str,
         client_id: str,
         client_secret: str,
-        verify_ssl: str = "true",
+        verify_ssl: str = "false",
+        auth_type: str = "user",
+        referer: Optional[str] = None,
         make_active: bool = True,
         make_default: bool = True,
     ) -> str:
         """
-        Create a new connection profile:
-          - creates folder + meta.json + .env with core settings
-          - adds entry in connections.json
-          - optionally sets as active/default
+        Create a new connection profile.  Creates folder + meta.json + .env with
+        core settings, adds entry in connections.json and optionally sets as
+        active/default
         """
+        auth_type = _normalize_auth_type(auth_type)
+        referer = (referer or "").strip() or None
+
         label = (label or "").strip()
         if not label:
             raise ValueError("label is required")
@@ -334,7 +359,7 @@ class ConnectionStore:
         cdir.mkdir(parents=True, exist_ok=True)
 
         verify_bool, ca_bundle, persisted_verify = _coerce_verify_ssl_input(verify_ssl)
-
+        auth_type = _normalize_auth_type(auth_type)
         # Seed .env (core keys + verify)
         env_path = self.env_path(cid)
         if not env_path.exists():
@@ -344,6 +369,8 @@ class ConnectionStore:
                 "PORTAL_URL=''\n"
                 "OAUTH_CLIENT_ID=''\n"
                 "OAUTH_CLIENT_SECRET=''\n"
+                "OAUTH_AUTH_TYPE=''\n"
+                "OAUTH_REFERER=''\n"
                 "OAUTH_VERIFY_SSL=''\n"
                 "\n"
             )
@@ -352,6 +379,8 @@ class ConnectionStore:
         set_env_key(str(env_path), "PORTAL_URL", portal_url)
         set_env_key(str(env_path), "OAUTH_CLIENT_ID", client_id)
         set_env_key(str(env_path), "OAUTH_CLIENT_SECRET", client_secret)
+        set_env_key(str(env_path), "OAUTH_AUTH_TYPE", auth_type)
+        set_env_key(str(env_path), "OAUTH_REFERER", referer or "")
         set_env_key(str(env_path), "OAUTH_VERIFY_SSL", persisted_verify)
 
         # Write meta.json
@@ -364,6 +393,8 @@ class ConnectionStore:
             tags=[],
             verify_ssl=verify_bool,
             ca_bundle=ca_bundle,
+            auth_type=auth_type,
+            referer= referer
         )
         self.save_meta(meta)
 
@@ -381,6 +412,8 @@ class ConnectionStore:
                     "tags": list(meta.tags),
                     "verify_ssl": meta.verify_ssl,
                     "ca_bundle": meta.ca_bundle,
+                    "auth_type": meta.auth_type,
+                    "referer": meta.referer,
                 }
             )
         else:
@@ -390,6 +423,8 @@ class ConnectionStore:
             existing.setdefault("created_at", meta.created_at)
             existing["verify_ssl"] = meta.verify_ssl
             existing["ca_bundle"] = meta.ca_bundle
+            existing["auth_type"] = meta.auth_type
+            existing["referer"] = meta.referer
 
         self._save_index(idx)
 
@@ -468,6 +503,8 @@ class ConnectionStore:
             tags=data.get("tags") or [],
             verify_ssl=bool(data.get("verify_ssl", True)),
             ca_bundle=data.get("ca_bundle"),
+            auth_type=_normalize_auth_type(data.get("auth_type")),
+            referer=(data.get("referer") or "").strip() or None,
         )
 
     def save_meta(self, meta: ConnectionMeta) -> None:
@@ -481,6 +518,8 @@ class ConnectionStore:
             "tags": list(meta.tags),
             "verify_ssl": meta.verify_ssl,
             "ca_bundle": meta.ca_bundle,
+            "auth_type": meta.auth_type,
+            "referer": meta.referer,
         }
         _atomic_write_json(p, payload)
 
@@ -499,6 +538,8 @@ class ConnectionStore:
                     tags=meta.tags,
                     verify_ssl=meta.verify_ssl,
                     ca_bundle=meta.ca_bundle,
+                    auth_type=meta.auth_type,
+                    referer=meta.referer,
                 )
             )
 
