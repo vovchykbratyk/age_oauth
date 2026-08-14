@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict
 from urllib.parse import urlencode
 
 import requests
@@ -17,7 +17,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from .envfile import parse_env_file, set_env_key
-from .connections import ConnectionStore
+from .connections import ConnectionStore, _normalize_auth_type
 
 log = logging.getLogger("age_oauth")
 
@@ -106,9 +106,30 @@ class OAuthConfig:
     client_id: str
     client_secret: str
     env_path: str
+    auth_type: str = "user"
     redirect_uri: str = "urn:ietf:wg:oauth:2.0:oob"
     scope: str = "portal:user:read,portal:item:read,portal:group:read"
+    referer: str | None = None
     verify_ssl: bool | str = False
+
+
+@dataclass
+class OAuthIdentity:
+    auth_type: str
+
+    username: str | None = None
+
+    app_id: str | None = None
+    app_item_id: str | None = None
+    app_title: str | None = None
+    app_owner: str | None = None
+
+    source: str | None = None
+    warning: str | None = None
+
+
+
+
 
 
 class AGEOAuth:
@@ -134,6 +155,8 @@ class AGEOAuth:
         self.client_secret = env.get("OAUTH_CLIENT_SECRET") or config.client_secret
         self.redirect_uri = env.get("OAUTH_REDIRECT_URI") or config.redirect_uri
         self.scope = env.get("OAUTH_SCOPE") or config.scope
+        self.auth_type = _normalize_auth_type(env.get("OAUTH_AUTH_TYPE") or config.auth_type)
+        self.referer = (env.get("OAUTH_REFERER") or config.referer or "").strip() or None
 
         # token state (won't be there on first run)
         self._access_token = env.get("OAUTH_ACCESS_TOKEN", "")
@@ -147,7 +170,11 @@ class AGEOAuth:
     @property
     def access_token(self) -> str:
         if not self._access_token or self.is_expired():
-            self.refresh_or_login()
+            if self.auth_type == "app":
+                self._request_client_credentials_token()
+            else:
+                self.refresh_or_login()
+
         return self._access_token
 
     @property
@@ -158,6 +185,9 @@ class AGEOAuth:
         return time.time() >= (self._expires_at - skew_seconds)
 
     def refresh_or_login(self) -> None:
+        if self.auth_type != "user":
+            self._request_client_credentials_token()
+            return
         if self._refresh_token:
             try:
                 self._refresh_access_token()
@@ -167,6 +197,9 @@ class AGEOAuth:
         self._interactive_login()
 
     def _interactive_login(self) -> None:
+        if self.auth_type != "user":
+            raise RuntimeError("Interactive login is only valid for user-authenticated connections")
+        
         params = {
             "client_id": self.client_id,
             "response_type": "code",
@@ -188,6 +221,9 @@ class AGEOAuth:
         self._exchange_code_for_tokens(code)
 
     def _exchange_code_for_tokens(self, code: str) -> None:
+        if self.auth_type != "user":
+            raise RuntimeError("Interactive login is only valid for user-authenticated connections")
+        
         data = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
@@ -198,6 +234,9 @@ class AGEOAuth:
         self._request_token(data)
 
     def _refresh_access_token(self) -> None:
+        if self.auth_type != "user":
+            raise RuntimeError("Token refresh is only valid for user-authenticated connections")
+
         if not self._refresh_token:
             raise RuntimeError("No refresh_token available for refresh.")
         data = {
@@ -210,10 +249,36 @@ class AGEOAuth:
         print("Refreshing access token using refresh_token...")
         self._request_token(data)
 
+    def _request_client_credentials_token(self) -> None:
+        print("Authenticating application using client credentials...")
+
+        data = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "grant_type": "client_credentials",
+        }
+
+        self._request_token(data)
+
+    def _request_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+
+        if self.referer:
+            headers["Referer"] = self.referer
+
+        return headers
+
     def _request_token(self, data: Dict[str, str]) -> None:
         data = dict(data)
         data["f"] = "json"
-        resp = requests.post(self.token_url, data=data, timeout=30, verify=self.verify_ssl)
+        resp = requests.post(
+            self.token_url,
+            data=data,
+            headers=self._request_headers(),
+            timeout=30,
+            verify=self.verify_ssl,
+        )
+
         if not resp.ok:
             try:
                 detail = resp.json()
@@ -229,24 +294,57 @@ class AGEOAuth:
         expires_in = float(payload.get("expires_in", 3600))
         self._expires_at = time.time() + expires_in
 
-        if "refresh_token" in payload:
+        if self.auth_type == "user" and "refresh_token" in payload:
             self._refresh_token = payload["refresh_token"]
-            now_epoch = time.time()
-            set_env_key(self.env_path, "OAUTH_REFRESH_TOKEN_ROTATED_AT", str(now_epoch))
-            iso_now = datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat()
-            set_env_key(self.env_path, "OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC", iso_now)
 
-        self._username = payload.get("username", "") or ""
-        if not self._username:
-            try:
-                url = f"{self.portal_url}/sharing/rest/community/self"
-                params = {"f": "json", "token": self._access_token}
-                who = requests.get(url, params=params, timeout=30, verify=self.verify_ssl)
-                if who.ok:
-                    info = who.json()
-                    self._username = (info.get("username") or "").strip()
-            except Exception as ex:
-                log.warning("Unable to backfill username from community/self: %r", ex)
+            now_epoch = time.time()
+            set_env_key(
+                self.env_path,
+                "OAUTH_REFRESH_TOKEN_ROTATED_AT",
+                str(now_epoch),
+            )
+
+            iso_now = datetime.fromtimestamp(
+                now_epoch,
+                tz=timezone.utc,
+            ).isoformat()
+
+            set_env_key(
+                self.env_path,
+                "OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC",
+                iso_now,
+            )
+
+        if self.auth_type == "user":
+            self._username = payload.get("username", "") or ""
+
+            if not self._username:
+                try:
+                    url = f"{self.portal_url}/sharing/rest/community/self"
+
+                    params = {
+                        "f": "json",
+                        "token": self._access_token,
+                    }
+
+                    who = requests.get(
+                        url,
+                        params=params,
+                        headers=self._request_headers(),
+                        timeout=30,
+                        verify=self.verify_ssl,
+                    )
+
+                    if who.ok:
+                        info = who.json()
+                        self._username = (info.get("username") or "").strip()
+
+                except Exception as ex:
+                    log.warning("Unable to backfill username from community/self: %r", ex)
+
+        else:   # app auth
+            self._username = ""
+            self._refresh_token = ""
                     
         if "scope" in payload:
             self.scope = payload["scope"]
@@ -271,6 +369,8 @@ class AGEOAuth:
         save("PORTAL_URL", self.portal_url)
         save("OAUTH_CLIENT_ID", self.client_id)
         save("OAUTH_CLIENT_SECRET", self.client_secret)
+        save("OAUTH_AUTH_TYPE", self.auth_type)
+        save("OAUTH_REFERER", self.referer or "")
 
         v = self.verify_ssl
         if isinstance(v, bool):
@@ -281,13 +381,255 @@ class AGEOAuth:
         # token-ish
         save("OAUTH_REDIRECT_URI", self.redirect_uri)
         save("OAUTH_SCOPE", self.scope)
+        if self.auth_type == "app":
+            save("OAUTH_REFRESH_TOKEN", "")
+            save("OAUTH_USERNAME", "")
+        else:
+            save("OAUTH_REFRESH_TOKEN", self._refresh_token)
+            if self._username:
+                save("OAUTH_USERNAME", self._username)
+
         save("OAUTH_ACCESS_TOKEN", self._access_token)
-        save("OAUTH_REFRESH_TOKEN", self._refresh_token)
         save("OAUTH_TOKEN_EXPIRES_AT", self._expires_at)  # epoch
         iso_expiration = datetime.fromtimestamp(self._expires_at, tz=timezone.utc).isoformat()
         save("OAUTH_TOKEN_EXPIRES_AT_UTC", iso_expiration)
-        if self._username:
-            save("OAUTH_USERNAME", self._username)
+
+
+def _load_auth_for_connection(
+    *,
+    connection: str | None = None,
+    connection_id: str | None = None,
+    prompt_if_missing: bool = False
+) -> tuple[ConnectionStore, str, AGEOAuth]:
+    """
+    Resolve a saved connection profile and construct an AGEOAuth instance
+
+    returns (store, connection_id, auth)
+
+    this helper only loads and validates connection config, it does not rotate tokens or anything else
+    """
+    store = ConnectionStore()
+
+    cid = store.resolve(
+        connection=connection,
+        connection_id=connection_id,
+    )
+
+    store.ensure_ready(
+        cid,
+        prompt=prompt_if_missing,
+    )
+
+    env_file = store.env_path(cid)
+    env = parse_env_file(env_file)
+
+    portal_url = (env.get("PORTAL_URL") or "").rstrip("/")
+    client_id = (env.get("OAUTH_CLIENT_ID") or "").strip()
+    client_secret = (env.get("OAUTH_CLIENT_SECRET") or "").strip()
+    auth_type = _normalize_auth_type(env.get("OAUTH_AUTH_TYPE"))
+
+    missing = []
+
+    if not portal_url:
+        missing.append("PORTAL_URL")
+
+    if not client_id:
+        missing.append("OAUTH_CLIENT_ID")
+
+    if not client_secret:
+        missing.append("OAUTH_CLIENT_SECRET")
+
+    if missing:
+        raise RuntimeError(
+            f"Core OAuth settings incomplete for connection {cid}: "
+            f"{', '.join(missing)}"
+        )
+
+    cfg = OAuthConfig(
+        portal_url=portal_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        env_path=str(env_file),
+        auth_type=auth_type,
+    )
+
+    auth = AGEOAuth(cfg)
+
+    return store, cid, auth
+
+
+def resolve_identity(
+    gis,
+    *,
+    connection: str | None = None,
+    connection_id: str | None = None,
+) -> OAuthIdentity:
+    """
+    Resolve the authenticated principal for the selected connection.
+
+    User-authenticated connections:
+      1. Try gis.users.me
+      2. Fall back to /community/self
+      3. Fall back to cached OAUTH_USERNAME
+
+    App-authenticated connections:
+      1. Query /portals/self
+      2. Read appInfo
+      3. Return application identity information
+
+    appOwner identifies the owner of the OAuth application item.
+    It is NOT treated as the authenticated username.
+    """
+
+    store, cid, auth = _load_auth_for_connection(
+        connection=connection,
+        connection_id=connection_id,
+        prompt_if_missing=False,
+    )
+
+    env = parse_env_file(store.env_path(cid))
+
+
+    # App authentication
+    if auth.auth_type == "app":
+        url = f"{auth.portal_url}/sharing/rest/portals/self"
+
+        params = {
+            "f": "json",
+            "token": auth.access_token,
+        }
+
+        resp = requests.get(
+            url,
+            params=params,
+            headers=auth._request_headers(),
+            timeout=30,
+            verify=auth.verify_ssl,
+        )
+
+        if not resp.ok:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+
+            raise RuntimeError(
+                f"portals/self lookup failed: "
+                f"{resp.status_code} {detail}"
+            )
+
+        payload = resp.json()
+
+        
+
+        if "error" in payload:
+            raise RuntimeError(
+                f"portals/self returned error: {payload['error']}"
+            )
+
+        app_info = payload.get("appInfo") or {}
+
+        if not app_info:
+            raise RuntimeError(
+                "Application-authenticated connection did not return "
+                "appInfo from portals/self."
+            )
+
+        app_id = (app_info.get("appId") or "").strip()
+
+        if not app_id:
+            raise RuntimeError(
+                "Application-authenticated response contained "
+                "appInfo but no appId."
+            )
+
+        if payload.get("user"):
+            log.warning(
+                "Application-authenticated response unexpectedly "
+                "included a user object."
+            )
+
+        return OAuthIdentity(
+            auth_type="app",
+            app_id=app_id,
+            app_item_id=(app_info.get("itemId") or "").strip() or None,
+            app_title=(app_info.get("appTitle") or "").strip() or None,
+            app_owner=(app_info.get("appOwner") or "").strip() or None,
+            source="portals/self.appInfo",
+        )
+
+    # User auth
+    # try... ArcGIS Python API identity
+    try:
+        me = gis.users.me
+
+        username = (
+            getattr(me, "username", None) or ""
+        ).strip()
+
+        if username:
+            return OAuthIdentity(
+                auth_type="user",
+                username=username,
+                source="gis.users.me",
+            )
+
+    except Exception as ex:
+        log.warning(
+            "gis.users.me lookup failed: %r",
+            ex,
+        )
+
+    # or.. direct REST call
+    try:
+        username = get_username_via_rest(
+            connection=connection,
+            connection_id=connection_id,
+            prompt_if_missing=False,
+        )
+
+        if username:
+            return OAuthIdentity(
+                auth_type="user",
+                username=username,
+                source="community/self",
+                warning=(
+                    "ArcGIS Python API did not populate "
+                    "gis.users.me.username; identity was resolved "
+                    "using community/self."
+                ),
+            )
+
+    except Exception as ex:
+        log.warning(
+            "community/self lookup failed: %r",
+            ex,
+        )
+
+    # or, lastly, cached username
+    username = (
+        env.get("OAUTH_USERNAME") or ""
+    ).strip()
+
+    if username:
+        return OAuthIdentity(
+            auth_type="user",
+            username=username,
+            source="env",
+            warning=(
+                "Live identity lookup failed. "
+                "Using cached OAUTH_USERNAME."
+            ),
+        )
+
+    return OAuthIdentity(
+        auth_type="user",
+        source="unknown",
+        warning=(
+            "Unable to determine authenticated user from "
+            "gis.users.me, community/self, or cached profile."
+        ),
+    )
 
 
 def resolve_live_username(
@@ -296,55 +638,33 @@ def resolve_live_username(
     connection: str | None = None,
     connection_id: str | None = None,
 ) -> tuple[str | None, str, str | None]:
-    
     """
-    resolve the username from a gis object, then REST community/self endpoint,
-    then look in .env for cached value or give up and return 'unknown'
-    """
-    # first try to get it from the gis object
-    try:
-        me = gis.users.me
-        username = (getattr(me, "username", None) or "").strip()
-        if username:
-            return username, "gis.users.me", None
-    except Exception as ex:
-        log.warning("gis.users.me lookup failed: %r", ex)
+    Backward-compatible user identity resolver.
 
-    # direct portal rest try
-    try:
-        username = get_username_via_rest(
-            connection=connection,
-            connection_id=connection_id,
-            prompt_if_missing=False,
+    Deprecated: use resolve_identity() for new code.
+    """
+
+    identity = resolve_identity(
+        gis,
+        connection=connection,
+        connection_id=connection_id,
+    )
+
+    if identity.auth_type != "user":
+        return (
+            None,
+            identity.source or "app",
+            (
+                "Connection is authenticated as an application, "
+                "not as a user."
+            ),
         )
-        if username:
-            return (
-                username,
-                "community/self",
-                "ArcGIS Python API did not populate gis.users.me.username; "
-                "identity was discovered via direct REST call using current token",
-            )
-    except Exception as ex:
-        log.warning("community/self lookup failed: %r", ex)
 
-    # see if there's a cached value
-    try:
-        store = ConnectionStore()
-        cid = store.resolve(connection=connection, connection_id=connection_id)
-        env = parse_env_file(store.env_path(cid))
-        username = (env.get("OAUTH_USERNAME") or "").strip()
-        if username:
-            return (
-                f"{username} [CACHED]",
-                "env",
-                "Live identity lookup failed. Could only get cached OAUTH_USERNAME from connection profile. "
-                "The current GIS object/session may not be healthy. If issues persist, remove and re-add the "
-                "connection and log in again."
-            )
-    except Exception as ex:
-        log.warning("env username fallback failed: %r", ex)
-
-    return None, "unknown", "Unable to determine username from either live GIS state or cached profile."
+    return (
+        identity.username,
+        identity.source or "unknown",
+        identity.warning,
+    )
 
 
 def get_username_via_rest(
@@ -357,16 +677,17 @@ def get_username_via_rest(
     Resolve the saved connection, make sure a live access token exists,
     and get the current user from portal via REST (outside API wrapper)
     """
+
     
-    store = ConnectionStore()
-    cid = store.resolve(connection=connection, connection_id=connection_id)
+    _, _, auth = _load_auth_for_connection(
+        connection=connection,
+        connection_id=connection_id,
+        prompt_if_missing=prompt_if_missing,
+    )
 
-    if prompt_if_missing:
-        store.ensure_ready(cid, prompt=True)
-    else:
-        store.ensure_ready(cid, prompt=False)
+    if auth.auth_type != "user":
+        raise RuntimeError("Username lookup is not valid for application authenticated connections")
 
-    env_file = store.env_path(cid)
     # pester the request_token for rotation if it needs it
     _rotate_refresh_token_if_needed(
         connection=connection,
@@ -374,21 +695,12 @@ def get_username_via_rest(
         max_age_days=3,
     )
 
-    env = parse_env_file(env_file)
-
-    portal_url = (env.get("PORTAL_URL") or "").rstrip("/")
-    client_id = env.get("OAUTH_CLIENT_ID") or ""
-    client_secret = env.get("OAUTH_CLIENT_SECRET") or ""
-    if not portal_url or not client_id or not client_secret:
-        raise RuntimeError(f"Core OAuth settings incomplete for connection: {cid}")
-
-    cfg = OAuthConfig(
-        portal_url=portal_url,
-        client_id=client_id,
-        client_secret=client_secret,
-        env_path=str(env_file),
+    # reread profile because rotation may have updated refresh/access token state!
+    _, _, auth = _load_auth_for_connection(
+        connection=connection,
+        connection_id=connection_id,
+        prompt_if_missing=False,
     )
-    auth = AGEOAuth(cfg)
 
     url = f"{auth.portal_url}/sharing/rest/community/self"
     params = {
@@ -396,7 +708,13 @@ def get_username_via_rest(
         "token": auth.access_token,
     }
 
-    resp = requests.get(url, params=params, timeout=30, verify=auth.verify_ssl)
+    resp = requests.get(
+        url,
+        params=params,
+        headers=auth._request_headers(),
+        timeout=30,
+        verify=auth.verify_ssl,
+    )
     if not resp.ok:
         try:
             detail = resp.json()
@@ -426,44 +744,30 @@ def get_gis(
     """
     from arcgis.gis import GIS
 
-    store = ConnectionStore()
-    cid = store.resolve(connection=connection, connection_id=connection_id)
-
-    # Ensure env file exists + has required core keys; prompt if allowed.
-    if prompt_if_missing:
-        store.ensure_ready(cid, prompt=True)
-    else:
-        store.ensure_ready(cid, prompt=False)
-
-    env_file = store.env_path(cid)
-
-    # do a quick best-effort refresh_token rotation
-    _rotate_refresh_token_if_needed(
+    store, cid, auth = _load_auth_for_connection(
         connection=connection,
         connection_id=connection_id,
-        max_age_days=3,
+        prompt_if_missing=prompt_if_missing,
     )
 
-    # quick read from env file, build OAuthConfig from those vals without modding os.environ
-    env = parse_env_file(env_file)
-
-    portal_url = (env.get("PORTAL_URL") or "").rstrip("/")
-    client_id = env.get("OAUTH_CLIENT_ID") or ""
-    client_secret = env.get("OAUTH_CLIENT_SECRET") or ""
-    if not portal_url or not client_id or not client_secret:
-        raise RuntimeError(f"Core OAuth settings incomplete for connection: {cid}")
-
-    cfg = OAuthConfig(
-        portal_url=portal_url,
-        client_id=client_id,
-        client_secret=client_secret,
-        env_path=str(env_file),
-    )
-    auth = AGEOAuth(cfg)
+    if auth.auth_type == "user":
+        _rotate_refresh_token_if_needed(
+            connection=connection,
+            connection_id=connection_id,
+            max_age_days=3,
+        )
+        # reread profile because rotation may have updated refresh/access token state!
+        _, _, auth = _load_auth_for_connection(
+            connection=connection,
+            connection_id=connection_id,
+            prompt_if_missing=False,
+        )
 
     # GIS SSL handling: verify_cert bool + ca_bundles path when needed
     gis_kwargs = {}
+
     v = auth.verify_ssl
+
     if isinstance(v, bool):
         gis_verify = v
     else:
@@ -471,6 +775,17 @@ def get_gis(
         gis_verify = True
         gis_kwargs["ca_bundles"] = ca_path
 
-    gis = GIS(auth.portal_url, token=auth.access_token, verify_cert=gis_verify, **gis_kwargs)
+    # preserve token-bound HTTP referer
+    if auth.referer:
+        gis_kwargs["referer"] = auth.referer
+
+    gis = GIS(
+        auth.portal_url,
+        token=auth.access_token,
+        verify_cert=gis_verify,
+        **gis_kwargs
+    )
+
     store.touch(cid)
+
     return gis
