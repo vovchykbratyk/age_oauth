@@ -10,7 +10,7 @@ import traceback
 from typing import Optional
 
 from .connections import ConnectionStore
-from .oauth import get_gis, resolve_live_username
+from .oauth import get_gis, resolve_identity
 from .tokens import maybe_rotate_refresh_token
 
 
@@ -77,6 +77,9 @@ def _print_connection(store: ConnectionStore, cid: str) -> None:
         print(f"Label:      {meta.label}")
         print(f"Portal URL: {meta.portal_url}")
         print(f"Verify SSL: {meta.verify_ssl}")
+        print(f"Auth type:  {meta.auth_type}")
+        if meta.referer:
+            print(f"Referer:   {meta.referer}")
         if meta.ca_bundle:
             print(f"CA Bundle:  {meta.ca_bundle}")
         print(f"Created:    {meta.created_at}")
@@ -110,6 +113,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     add.add_argument("--client-secret", default=None, help="OAuth client secret")
     add.add_argument("--no-active", action="store_true", help="Do not set as active connection")
     add.add_argument("--no-default", action="store_true", help="Do not set as default connection")
+    add.add_argument("--auth-type", choices=("user", "app"), default="user", help="OAuth authentication type: user or app (default: user)")
+    add.add_argument("--referer", default=None, help="Optional HTTP Referer required by the OAuth app credential")
 
     use = csub.add_parser("use", help="Set active connection")
     use.add_argument("selector", help="Connection id or label")
@@ -188,6 +193,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     client_id=client_id,
                     client_secret=client_secret,
                     verify_ssl=verify_ssl,
+                    auth_type=args.auth_type,
+                    referer=args.referer,
                     make_active=not args.no_active,
                     make_default=not args.no_default,
                 )
@@ -281,9 +288,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 connection_id = args.connection_id
 
                 log.info(
-                    "resolving connection (connection=%r, connection_id=%r)",
+                    "Resolving connection "
+                    "(connection=%r, connection_id=%r)",
                     selector,
-                    connection_id
+                    connection_id,
                 )
 
                 gis = get_gis(
@@ -292,23 +300,55 @@ def main(argv: Optional[list[str]] = None) -> int:
                     prompt_if_missing=True,
                 )
 
-                username, source, warning = resolve_live_username(
+                identity = resolve_identity(
                     gis,
                     connection=selector,
                     connection_id=connection_id,
                 )
 
-                print(username or "unknown")
+                if identity.auth_type == "app":
+                    print("Type:        application")
+                    print(f"Application: {identity.app_title or 'unknown'}")
+                    print(f"App ID:      {identity.app_id or 'unknown'}")
 
-                if warning:
-                    level = "WARN" if source in ("community/self", "env") else "ERROR"
-                    print(f"[{level}] {warning}", file=sys.stderr)
+                    if identity.app_item_id:
+                        print(f"Item ID:     {identity.app_item_id}")
 
-                if source in ("gis.users.me", "community/self"):
+                    if identity.app_owner:
+                        print(f"Owner:       {identity.app_owner}")
+
+                    if identity.warning:
+                        print(
+                            f"[WARN] {identity.warning}",
+                            file=sys.stderr,
+                        )
+
+                    return 0 if identity.app_id else 1
+
+                # User authentication
+                print(identity.username or "unknown")
+
+                if identity.warning:
+                    level = (
+                        "WARN"
+                        if identity.source in ("community/self", "env")
+                        else "ERROR"
+                    )
+
+                    print(
+                        f"[{level}] {identity.warning}",
+                        file=sys.stderr,
+                    )
+
+                if identity.source in (
+                    "gis.users.me",
+                    "community/self",
+                ):
                     return 0
-                
-                if source == "env":
+
+                if identity.source == "env":
                     return 2
+
                 return 1
 
             # login
