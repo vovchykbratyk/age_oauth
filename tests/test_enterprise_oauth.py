@@ -1,620 +1,374 @@
 from __future__ import annotations
 
+import argparse
 import json
-import os
-import sys
-from typing import Any, Dict
 
-import requests
-from dotenv import load_dotenv
-
-from age_oauth.oauth import (
-    AGEOAuth,
-    OAuthConfig,
-    OAuthIdentity,
-    resolve_identity,
-)
+from age_oauth import get_gis
+from age_oauth.oauth import resolve_identity
 
 
-# Replace this with a known protected item that the selected credential
-# should be able to access.
 TEST_PRIVATE_ITEM_ID = "819e78caf432430d913eaa68d2cb6034"
 
 
-def pretty(obj: Any) -> str:
+def _pretty(obj) -> str:
     return json.dumps(
         obj,
         indent=2,
         sort_keys=True,
+        default=str,
     )
 
 
-def build_auth() -> AGEOAuth:
+def test_identity(connection: str):
     """
-    Build AGEOAuth directly from environment variables.
-
-    This script is intentionally a live integration harness rather than
-    a ConnectionStore test. It lets us point directly at a real Enterprise
-    deployment and exercise the actual OAuth behavior.
+    Confirm what principal age-oauth believes is authenticated.
     """
-    load_dotenv()
 
-    portal_url = (
-        os.getenv("PORTAL_URL", "")
-        .strip()
-        .rstrip("/")
+    gis = get_gis(
+        connection=connection,
+        prompt_if_missing=False,
     )
 
-    client_id = (
-        os.getenv("OAUTH_CLIENT_ID", "")
-        .strip()
+    identity = resolve_identity(
+        gis,
+        connection=connection,
     )
 
-    client_secret = (
-        os.getenv("OAUTH_CLIENT_SECRET", "")
-        .strip()
-    )
+    print("[IDENTITY]")
 
-    auth_type = (
-        os.getenv("OAUTH_AUTH_TYPE", "user")
-        .strip()
-        .lower()
-    )
+    if identity.auth_type == "app":
+        print("  type        : application")
+        print(f"  application : {identity.app_title}")
+        print(f"  app_id      : {identity.app_id}")
+        print(f"  item_id     : {identity.app_item_id}")
+        print(f"  owner       : {identity.app_owner}")
+        print(f"  username    : {identity.username}")
 
-    referer = (
-        os.getenv("OAUTH_REFERER", "")
-        .strip()
-        or None
-    )
+        assert identity.app_id
+        assert identity.username is None
 
-    redirect_uri = (
-        os.getenv(
-            "OAUTH_REDIRECT_URI",
-            "urn:ietf:wg:oauth:2.0:oob",
-        )
-        .strip()
-    )
-
-    if not portal_url or not client_id or not client_secret:
-        raise SystemExit(
-            "Missing PORTAL_URL, OAUTH_CLIENT_ID, "
-            "or OAUTH_CLIENT_SECRET in .env"
-        )
-
-    cfg = OAuthConfig(
-        portal_url=portal_url,
-        client_id=client_id,
-        client_secret=client_secret,
-        env_path=os.getenv(
-            "AGE_OAUTH_ENV_PATH",
-            ".env",
-        ),
-        auth_type=auth_type,
-        referer=referer,
-        redirect_uri=redirect_uri,
-    )
-
-    auth = AGEOAuth(cfg)
-
-    print("[CONFIG]")
-    print(f"  portal      : {auth.portal_url}")
-    print(f"  auth_type   : {auth.auth_type}")
-    print(f"  verify_ssl  : {auth.verify_ssl!r}")
-    print(f"  referer     : {auth.referer or '<none>'}")
-    print()
-
-    return auth
-
-
-def _request_kwargs(auth: AGEOAuth) -> Dict[str, Any]:
-    """
-    Common requests kwargs used throughout the live tests.
-    """
-    return {
-        "headers": auth._request_headers(),
-        "timeout": 30,
-        "verify": auth.verify_ssl,
-    }
-
-
-def test_portals_self(auth: AGEOAuth) -> Dict[str, Any]:
-    """
-    Query /portals/self directly with the current OAuth token.
-
-    For user auth, expect a user object.
-
-    For app auth, expect appInfo with an appId and do NOT interpret
-    appOwner as the authenticated username.
-    """
-    token = auth.access_token
-
-    url = (
-        f"{auth.portal_url}"
-        "/sharing/rest/portals/self"
-    )
-
-    params = {
-        "f": "json",
-        "token": token,
-    }
-
-    print(f"[TEST] GET {url}")
-
-    resp = requests.get(
-        url,
-        params=params,
-        **_request_kwargs(auth),
-    )
-
-    print(
-        f"  HTTP status : "
-        f"{resp.status_code}"
-    )
-
-    resp.raise_for_status()
-
-    data = resp.json()
-
-    if "error" in data:
-        raise RuntimeError(
-            f"portals/self returned error: "
-            f"{data['error']}"
-        )
-
-    print()
-
-    if auth.auth_type == "app":
-        app_info = data.get("appInfo") or {}
-        app_id = (
-            app_info.get("appId") or ""
-        ).strip()
-
-        print(
-            "[RESULTS] application identity"
-        )
-
-        print(
-            f"  appTitle : "
-            f"{app_info.get('appTitle')}"
-        )
-        print(
-            f"  appId    : "
-            f"{app_info.get('appId')}"
-        )
-        print(
-            f"  itemId   : "
-            f"{app_info.get('itemId')}"
-        )
-        print(
-            f"  appOwner : "
-            f"{app_info.get('appOwner')}"
-        )
-
-        print(
-            f"  user obj : "
-            f"{'present' if data.get('user') else 'absent'}"
-        )
-
-        if not app_info:
-            raise AssertionError(
-                "Expected appInfo for application "
-                "authentication, but none was returned."
-            )
-
-        if not app_id:
-            raise AssertionError(
-                "Expected appInfo.appId for application "
-                "authentication."
-            )
-
-        if data.get("user"):
-            print(
-                "[WARN] Application-authenticated response "
-                "also contained a user object."
-            )
-
-        print(
-            "\n[PASS] Portal identifies this token "
-            "as an application credential."
-        )
+        print()
+        print("[PASS] Application identity confirmed.")
 
     else:
-        user = data.get("user") or {}
+        print("  type        : user")
+        print(f"  username    : {identity.username}")
+        print(f"  source      : {identity.source}")
 
-        username = (
-            user.get("username") or ""
-        ).strip()
+        assert identity.username
 
+        print()
+        print("[PASS] User identity confirmed.")
+
+    print()
+
+    return gis, identity
+
+
+def test_private_item_access(
+    connection: str,
+    item_id: str,
+):
+    """
+    Confirm that the authenticated principal can retrieve a protected item
+    through the same get_gis() path used by production callers.
+    """
+
+    gis = get_gis(
+        connection=connection,
+        prompt_if_missing=False,
+    )
+
+    print(f"[TEST] Fetch protected item: {item_id}")
+
+    item = gis.content.get(item_id)
+
+    if item is None:
+        raise AssertionError(
+            f"Authenticated principal could not access item {item_id}"
+        )
+
+    print("[RESULTS]")
+    print(f"  id     : {item.id}")
+    print(f"  title  : {item.title}")
+    print(f"  type   : {item.type}")
+    print(f"  owner  : {item.owner}")
+    print(f"  access : {item.access}")
+
+    print()
+    print("[PASS] Protected item is accessible through authenticated GIS.")
+    print()
+
+    return gis, item
+
+
+def test_item_data(item):
+    """
+    For item types that have JSON data, confirm that the authenticated
+    principal can also retrieve the item's data payload.
+    """
+
+    print("[TEST] Fetch item data")
+
+    try:
+        data = item.get_data()
+    except Exception as ex:
+        raise AssertionError(
+            f"Item metadata was visible, but item data retrieval failed: {ex}"
+        ) from ex
+
+    if data is None:
         print(
-            "[RESULTS] user identity"
+            "[INFO] Item returned no separate data payload. "
+            "This may be normal for service items."
         )
-        print(
-            f"  username : "
-            f"{user.get('username')}"
-        )
-        print(
-            f"  fullName : "
-            f"{user.get('fullName')}"
-        )
-        print(
-            f"  role     : "
-            f"{user.get('role')}"
-        )
+        print()
+        return None
 
-        privileges = (
-            user.get("privileges") or []
-        )
+    print("[RESULTS] Item data retrieved successfully.")
 
-        print(
-            f"  privileges count : "
-            f"{len(privileges)}"
-        )
+    if isinstance(data, dict):
+        print(f"  top-level keys : {', '.join(sorted(data.keys()))}")
 
-        if not username:
-            raise AssertionError(
-                "Expected portals/self.user.username "
-                "for user authentication."
-            )
-
-        print(
-            "\n[PASS] Portal identifies this token "
-            "as a user credential."
-        )
-
+    print()
+    print("[PASS] Item data is accessible.")
     print()
 
     return data
 
 
-def test_resolved_identity(
-    auth: AGEOAuth,
-) -> OAuthIdentity:
+def test_service_access(gis, item):
     """
-    Exercise age-oauth's own resolve_identity() logic against the
-    live Enterprise system.
+    If the Portal item points to a service URL, query the service endpoint
+    through the authenticated GIS connection.
 
-    Because resolve_identity() normally works from a saved connection,
-    this test uses a lightweight GIS object only for the user path.
-
-    For app auth the GIS object is not consulted.
+    This is important because Portal item visibility and service access
+    are related but not identical tests.
     """
-    from arcgis.gis import GIS
 
-    gis_kwargs: Dict[str, Any] = {}
-
-    if auth.referer:
-        gis_kwargs["referer"] = auth.referer
-
-    if isinstance(auth.verify_ssl, bool):
-        verify_cert = auth.verify_ssl
-    else:
-        verify_cert = True
-        gis_kwargs["ca_bundles"] = str(
-            auth.verify_ssl
-        )
-
-    gis = GIS(
-        auth.portal_url,
-        token=auth.access_token,
-        verify_cert=verify_cert,
-        **gis_kwargs,
-    )
-
-    print("[TEST] ArcGIS Python API GIS object")
-
-    if auth.auth_type == "user":
-        print(
-            f"  gis.users.me : "
-            f"{gis.users.me}"
-        )
-    else:
-        print(
-            "  app auth: gis.users.me is not "
-            "used as the authoritative identity"
-        )
-
-    print()
-
-    return gis
-
-
-def test_private_item_visibility(
-    auth: AGEOAuth,
-    item_id: str,
-) -> Dict[str, Any]:
-    """
-    Compare anonymous and authenticated access to a protected item.
-
-    For app auth this verifies that the credential has been explicitly
-    granted access to the item.
-
-    For user auth this verifies access through the user's privileges.
-    """
-    base_url = (
-        f"{auth.portal_url}"
-        f"/sharing/rest/content/items/{item_id}"
-    )
-
-    anon_params = {
-        "f": "json",
-    }
-
-    authed_params = {
-        "f": "json",
-        "token": auth.access_token,
-    }
-
-    print(
-        f"[TEST] ANONYMOUS GET "
-        f"{base_url}"
-    )
-
-    anon_resp = requests.get(
-        base_url,
-        params=anon_params,
-        timeout=30,
-        verify=auth.verify_ssl,
-    )
-
-    anon_data = anon_resp.json()
-
-    print(
-        "  HTTP status:",
-        anon_resp.status_code,
-    )
-
-    if "error" in anon_data:
-        print(
-            "  ANONYMOUS error:"
-        )
-        print(
-            pretty(
-                anon_data["error"]
-            )
-        )
-    else:
-        print(
-            "  ANONYMOUS response:"
-        )
-        print(
-            pretty(
-                {
-                    k: anon_data.get(k)
-                    for k in (
-                        "id",
-                        "title",
-                        "access",
-                    )
-                }
-            )
-        )
-
-    print(
-        "\n[TEST] AUTHENTICATED GET"
-    )
-
-    auth_resp = requests.get(
-        base_url,
-        params=authed_params,
-        **_request_kwargs(auth),
-    )
-
-    auth_data = auth_resp.json()
-
-    print(
-        "  HTTP status:",
-        auth_resp.status_code,
-    )
-
-    if "error" in auth_data:
-        print(
-            "  AUTHENTICATED error:"
-        )
-        print(
-            pretty(
-                auth_data["error"]
-            )
-        )
-    else:
-        subset = {
-            k: auth_data.get(k)
-            for k in (
-                "id",
-                "title",
-                "owner",
-                "access",
-                "type",
-            )
-        }
-
-        print(
-            "  AUTHENTICATED response:"
-        )
-        print(
-            pretty(subset)
-        )
-
-    print()
-
-    anon_error = anon_data.get("error")
-    auth_error = auth_data.get("error")
-
-    if auth_error:
-        raise AssertionError(
-            "Authenticated item request failed. "
-            "Check the item ID and the credential's "
-            "assigned item access."
-        )
-
-    if anon_error and not auth_error:
-        print(
-            "[PASS] Authenticated credential can access "
-            "the item while anonymous access cannot."
-        )
-    else:
-        print(
-            "[INFO] Anonymous and authenticated behavior "
-            "did not clearly differ. The item may be public."
-        )
-
-    print()
-
-    return auth_data
-
-
-def inspect_service_capabilities(
-    auth: AGEOAuth,
-    item_json: Dict[str, Any],
-) -> None:
-    """
-    If the item points to a service, query the service endpoint using
-    the same OAuth token and referer.
-    """
-    service_url = item_json.get("url")
+    service_url = getattr(item, "url", None)
 
     if not service_url:
         print(
-            "[INFO] Item has no service URL. "
-            "Skipping service capability inspection."
+            "[INFO] Item has no service URL; "
+            "skipping service endpoint test."
         )
+        print()
+        return None
+
+    print(f"[TEST] Service endpoint: {service_url}")
+
+    # Use the GIS connection so we inherit the same token, referer,
+    # SSL behavior, and authentication context.
+    response = gis._con.get(
+        service_url,
+        params={"f": "json"},
+    )
+
+    if not response:
+        raise AssertionError(
+            "Service endpoint returned no response."
+        )
+
+    if isinstance(response, dict) and "error" in response:
+        raise AssertionError(
+            f"Service endpoint returned error: {response['error']}"
+        )
+
+    print("[RESULTS] Service endpoint accessible.")
+
+    if isinstance(response, dict):
+        print(f"  name         : {response.get('name')}")
+        print(f"  type         : {response.get('type')}")
+        print(f"  capabilities : {response.get('capabilities')}")
+
+        layers = response.get("layers") or []
+
+        if layers:
+            print(f"  layer count  : {len(layers)}")
+
+    print()
+    print("[PASS] Service endpoint is accessible using the app identity.")
+    print()
+
+    return response
+
+
+def test_first_layer_query(gis, item):
+    """
+    If the item is a Feature Service and exposes at least one layer,
+    perform a minimal query against layer 0.
+
+    This proves the application can actually read feature content,
+    which is much closer to Egress's real workload.
+    """
+
+    service_url = getattr(item, "url", None)
+
+    if not service_url:
+        print("[INFO] No service URL; skipping layer query.")
+        print()
         return
 
-    print(
-        f"[TEST] Inspecting service capabilities "
-        f"at {service_url}"
-    )
-
-    params = {
-        "f": "json",
-        "token": auth.access_token,
-    }
-
-    resp = requests.get(
+    service_info = gis._con.get(
         service_url,
-        params=params,
-        **_request_kwargs(auth),
+        params={"f": "json"},
     )
 
-    if not resp.ok:
+    layers = (
+        service_info.get("layers") or []
+        if isinstance(service_info, dict)
+        else []
+    )
+
+    if not layers:
+        print("[INFO] Service exposes no layers; skipping layer query.")
+        print()
+        return
+
+    layer_id = layers[0].get("id")
+
+    if layer_id is None:
+        print("[INFO] First layer has no id; skipping layer query.")
+        print()
+        return
+
+    layer_url = f"{service_url}/{layer_id}/query"
+
+    print(f"[TEST] Query first layer: {layer_url}")
+
+    result = gis._con.get(
+        layer_url,
+        params={
+            "f": "json",
+            "where": "1=1",
+            "outFields": "*",
+            "resultRecordCount": 1,
+            "returnGeometry": "false",
+        },
+    )
+
+    if isinstance(result, dict) and "error" in result:
         raise AssertionError(
-            "Service info request failed: "
-            f"{resp.status_code} {resp.text}"
+            f"Layer query returned error: {result['error']}"
         )
 
-    svc = resp.json()
-
-    if "error" in svc:
-        raise AssertionError(
-            f"Service endpoint returned error: "
-            f"{svc['error']}"
-        )
-
-    caps = svc.get(
-        "capabilities",
-        "",
+    features = (
+        result.get("features") or []
+        if isinstance(result, dict)
+        else []
     )
 
-    print(
-        "  capabilities:",
-        caps,
-    )
+    print(f"[RESULTS] Features returned: {len(features)}")
 
-    editing_info = (
-        svc.get("editingInfo") or {}
-    )
-
-    print(
-        "  editingInfo:",
-        pretty(editing_info),
-    )
-
-    if any(
-        capability in caps
-        for capability in (
-            "Update",
-            "Editing",
-            "Create",
-            "Delete",
-        )
-    ):
+    if features:
+        attrs = features[0].get("attributes") or {}
         print(
-            "  [INFO] Service exposes editing capabilities."
-        )
-    else:
-        print(
-            "  [INFO] Service appears read-only."
+            "  sample fields : "
+            + ", ".join(list(attrs.keys())[:10])
         )
 
     print()
+    print("[PASS] Feature layer query succeeded.")
+    print()
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print(
-            "Usage:\n"
-            "  python tests/test_enterprise_oauth.py identity\n"
-            "  python tests/test_enterprise_oauth.py item\n"
-            "  python tests/test_enterprise_oauth.py all\n"
-        )
-        raise SystemExit(1)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Live age-oauth / ArcGIS Enterprise integration test"
+    )
 
-    auth = build_auth()
+    parser.add_argument(
+        "--connection",
+        required=True,
+        help="Named age-oauth connection label or ID",
+    )
 
-    cmd = sys.argv[1].lower()
+    parser.add_argument(
+        "--item-id",
+        default=TEST_PRIVATE_ITEM_ID,
+        help="Protected Portal item ID to test",
+    )
 
-    if cmd == "identity":
-        test_portals_self(auth)
-        test_resolved_identity(auth)
+    parser.add_argument(
+        "test",
+        nargs="?",
+        choices=(
+            "identity",
+            "item",
+            "service",
+            "query",
+            "all",
+        ),
+        default="all",
+        help="Which integration test to run",
+    )
+
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    if args.test == "identity":
+        test_identity(args.connection)
         return
 
-    if cmd == "item":
-        if (
-            not TEST_PRIVATE_ITEM_ID
-            or TEST_PRIVATE_ITEM_ID.startswith(
-                "1234abcd"
-            )
-        ):
-            raise SystemExit(
-                "TEST_PRIVATE_ITEM_ID is not set "
-                "to a real protected item ID."
-            )
-
-        item_json = test_private_item_visibility(
-            auth,
-            TEST_PRIVATE_ITEM_ID,
+    if args.test == "item":
+        gis, item = test_private_item_access(
+            args.connection,
+            args.item_id,
         )
 
-        inspect_service_capabilities(
-            auth,
-            item_json,
+        test_item_data(item)
+        return
+
+    if args.test == "service":
+        gis, item = test_private_item_access(
+            args.connection,
+            args.item_id,
         )
 
+        test_service_access(
+            gis,
+            item,
+        )
         return
 
-    if cmd == "all":
-        test_portals_self(auth)
-        test_resolved_identity(auth)
+    if args.test == "query":
+        gis, item = test_private_item_access(
+            args.connection,
+            args.item_id,
+        )
 
-        if (
-            TEST_PRIVATE_ITEM_ID
-            and not TEST_PRIVATE_ITEM_ID.startswith(
-                "1234abcd"
-            )
-        ):
-            item_json = test_private_item_visibility(
-                auth,
-                TEST_PRIVATE_ITEM_ID,
-            )
-
-            inspect_service_capabilities(
-                auth,
-                item_json,
-            )
-
+        test_first_layer_query(
+            gis,
+            item,
+        )
         return
 
-    raise SystemExit(
-        f"Unknown command: {cmd}"
+    # all
+    test_identity(
+        args.connection,
+    )
+
+    gis, item = test_private_item_access(
+        args.connection,
+        args.item_id,
+    )
+
+    test_item_data(
+        item,
+    )
+
+    test_service_access(
+        gis,
+        item,
+    )
+
+    test_first_layer_query(
+        gis,
+        item,
     )
 
 
