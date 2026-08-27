@@ -23,8 +23,10 @@ _VALID_AUTH_TYPES = {"user", "app"}
 
 def _normalize_auth_type(value: str | None) -> str:
     """
-    Normalized connection authentication mode
-    Existing/legacy connections default to user authentication
+    normalized connection authentication mode
+
+    note that existing connections default to user auth, I may need to
+    make this a little cleaner later
     """
     auth_type = (value or "user").strip().lower()
 
@@ -58,8 +60,8 @@ def _read_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        # If corrupted, keep going but don't silently destroy data.
-        raise RuntimeError(f"Unable to parse JSON file: {path}")
+        # If corrupted, keep going nondestructively
+        raise RuntimeError(f"Can't parse JSON file: {path}")
 
 
 def _slugify(s: str) -> str:
@@ -76,7 +78,7 @@ def _normalize_portal_url(url: str) -> str:
 
 def _make_connection_id(label: str, portal_url: str) -> str:
     """
-    Stable-ish, readable ID. Collision risk is extremely low for normal usage.
+    generate a unique id
     """
     slug = _slugify(label)
     h = hashlib.sha1(_normalize_portal_url(portal_url).encode("utf-8")).hexdigest()[:8]
@@ -85,13 +87,10 @@ def _make_connection_id(label: str, portal_url: str) -> str:
 
 def _coerce_verify_ssl_input(raw: str) -> Tuple[bool, Optional[str], str]:
     """
-    Normalize verify SSL input into:
-      - verify_ssl bool
-      - ca_bundle path (optional)
-      - persisted string value for OAUTH_VERIFY_SSL
-    Rules:
-      - "true"/"false" -> bool
-      - otherwise treat as filesystem path (must exist)
+    normalize "verify SSL" input into payload:
+    * verify_ssl bool
+    * ca_bundle path (optional)
+    * persistent str val for OAUTH_VERIFY_SSL
     """
     s = (raw or "").strip()
     if not s:
@@ -125,9 +124,9 @@ class ConnectionMeta:
 
 class ConnectionStore:
     """
-    Stores multiple ArcGIS Enterprise connection profiles.
+    stores multiple ArcGIS Enterprise connection profiles
 
-    Layout:
+    pathing under user profile:
       <base>/
         connections.json
         active_connection
@@ -135,8 +134,6 @@ class ConnectionStore:
           <id>/
             .env
             meta.json
-
-    No external deps beyond platformdirs + stdlib.
     """
 
     SCHEMA_VERSION = 1
@@ -144,14 +141,11 @@ class ConnectionStore:
     def __init__(self, base_dir: Optional[Path] = None):
         self._base_dir = base_dir
 
-    # -------------------------
-    # Paths
-    # -------------------------
-
+    # paths & awareness
     def base_dir(self) -> Path:
         if self._base_dir is not None:
             return self._base_dir
-        # Vendor/appname are optional; keep it simple.
+        # app name optional... keep it simple
         return Path(user_config_dir("age_oauth"))
 
     def connections_dir(self) -> Path:
@@ -172,10 +166,7 @@ class ConnectionStore:
     def meta_path(self, connection_id: str) -> Path:
         return self.conn_dir(connection_id) / "meta.json"
 
-    # -------------------------
-    # Index helpers
-    # -------------------------
-
+    # index helpers
     def _default_index(self) -> Dict[str, Any]:
         return {
             "schema_version": self.SCHEMA_VERSION,
@@ -187,7 +178,7 @@ class ConnectionStore:
         idx = _read_json(self.index_path(), self._default_index())
         sv = idx.get("schema_version")
         if sv is None:
-            # allow legacy-ish file without schema_version
+            # allow legacy file without schema_version
             idx["schema_version"] = self.SCHEMA_VERSION
         elif sv != self.SCHEMA_VERSION:
             raise RuntimeError(
@@ -206,13 +197,10 @@ class ConnectionStore:
                 return c
         return None
 
-    # -------------------------
-    # Public operations
-    # -------------------------
-
+    # public methods
     def list(self) -> List[ConnectionMeta]:
         """
-        Return all connections from index, enriched (best-effort) with meta.json if present.
+        returns all connections from index, with data from meta.json if present
         """
         idx = self._load_index()
         out: List[ConnectionMeta] = []
@@ -266,15 +254,11 @@ class ConnectionStore:
 
     def resolve(self, *, connection: Optional[str] = None, connection_id: Optional[str] = None) -> str:
         """
-        Resolve a connection selector to a connection_id.
+        resolve a connection selector to a connection_id.
 
-        Precedence:
-          1) connection_id (exact)
-          2) connection (match id exact, else label case-insensitive exact, else unique prefix match)
-          3) active_connection
-          4) default_connection_id
-          5) if exactly one connection exists, use it
-          else -> error
+        selection sequence:
+        connection_id --> connection --> active_connection --> default_connection_id -->
+        only connection (if there's only one connection) --> or just error out
         """
         idx = self._load_index()
         conns = idx.get("connections", [])
@@ -340,9 +324,8 @@ class ConnectionStore:
         make_default: bool = True,
     ) -> str:
         """
-        Create a new connection profile.  Creates folder + meta.json + .env with
-        core settings, adds entry in connections.json and optionally sets as
-        active/default
+        make a new connection profile.  Creates folder + meta.json + .env with
+        core settings, adds entry in connections.json and set as default (optional)
         """
         auth_type = _normalize_auth_type(auth_type)
         referer = (referer or "").strip() or None
@@ -437,8 +420,8 @@ class ConnectionStore:
     
     def delete(self, *, connection: Optional[str] = None, connection_id: Optional[str] = None) -> str:
         """
-        Deletes a single connection by selector or ID.  Returns resolved connection_id
-        that was deleted.
+        delete a connection by selector or ID
+        return the connection_id that was deleted
         """
         cid = self.resolve(connection=connection, connection_id=connection_id)
 
@@ -473,7 +456,7 @@ class ConnectionStore:
     
     def reset_all(self) -> None:
         """
-        nuke the entire store, removing all connections (fresh install state)
+        nuke the whole store, removing all connections (fresh install state)
         """
         base = self.base_dir()
 
@@ -551,8 +534,8 @@ class ConnectionStore:
 
     def ensure_ready(self, connection_id: str, *, prompt: bool = True) -> None:
         """
-        Ensure the connection's env file exists and has required core keys.
-        If prompt=True, interactively prompts for missing items and writes them.
+        make sure connection env file exists and has required keys
+        if prompt=True, we will prompt the user interactively for missing vals
         """
         env_path = self.env_path(connection_id)
         env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -585,7 +568,7 @@ class ConnectionStore:
 
     def _prompt_for_core_settings(self, connection_id: str, env_path: Path, existing: Dict[str, str]) -> None:
         """
-        Prompt for core settings (same UX as legacy).
+        prompt for core settings
         """
         import getpass
 
@@ -636,10 +619,7 @@ class ConnectionStore:
 
         print(f"[OK] Updated connection settings: {connection_id}")
 
-    # -------------------------
-    # Internal asserts
-    # -------------------------
-
+    # private asserts
     def _assert_exists(self, connection_id: str) -> None:
         idx = self._load_index()
         if self._find_in_index(idx, connection_id) is None and not self.conn_dir(connection_id).exists():
