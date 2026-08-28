@@ -1,7 +1,6 @@
 # age_oauth/oauth.py
 from __future__ import annotations
 
-import os
 import time
 import logging
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ import webbrowser
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from .envfile import parse_env_file, set_env_key
+from .envfile import parse_env_file, set_env_key, set_env_keys
 from .connections import ConnectionStore, _normalize_auth_type
 
 log = logging.getLogger("age_oauth")
@@ -50,11 +49,14 @@ def _coerce_verify_ssl(env_value: str | None, default: bool = True) -> bool | st
     if v in ("true", "1", "yes", "on"):
         return True
 
-    # treat as path
-    if os.path.exists(env_verify):
-        return env_verify
+    p = Path(env_verify).expanduser()
+
+    if p.exists():
+        return str(p)
+
     raise ValueError(
-        f"OAUTH_VERIFY_SSL set to {env_verify!r} but is not a boolean or valid path value"
+        f"OAUTH_VERIFY_SSL set to {env_verify!r} "
+        f"but is not boolean or a valid path value"
     )
 
 
@@ -179,9 +181,17 @@ class AGEOAuth:
         self._refresh_token = env.get("OAUTH_REFRESH_TOKEN", "")
         self._expires_at = float(env.get("OAUTH_TOKEN_EXPIRES_AT") or 0)
         self._username = env.get("OAUTH_USERNAME", "")
+        self._refresh_token_rotated_at = (
+            env.get("OAUTH_REFRESH_TOKEN_ROTATED_AT") or ""
+        )
+        self._refresh_token_rotated_at_utc = (
+            env.get("OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC") or ""
+        )
 
         self.authorize_url = f"{self.portal_url}/sharing/rest/oauth2/authorize"
         self.token_url = f"{self.portal_url}/sharing/rest/oauth2/token"
+
+        
 
     @property
     def access_token(self) -> str:
@@ -314,22 +324,11 @@ class AGEOAuth:
             self._refresh_token = payload["refresh_token"]
 
             now_epoch = time.time()
-            set_env_key(
-                self.env_path,
-                "OAUTH_REFRESH_TOKEN_ROTATED_AT",
-                str(now_epoch),
-            )
-
-            iso_now = datetime.fromtimestamp(
+            self._refresh_token_rotated_at = str(now_epoch)
+            self._refresh_token_rotated_at_utc = datetime.fromtimestamp(
                 now_epoch,
                 tz=timezone.utc,
             ).isoformat()
-
-            set_env_key(
-                self.env_path,
-                "OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC",
-                iso_now,
-            )
 
         if self.auth_type == "user":
             self._username = payload.get("username", "") or ""
@@ -392,14 +391,17 @@ class AGEOAuth:
             "OAUTH_REDIRECT_URI": self.redirect_uri,
             "OAUTH_SCOPE": self.scope,
             "OAUTH_ACCESS_TOKEN": self._access_token,
-            "OAUTH_TOKEN_EXPIRES_AT": str(self._expires_at),
-            "OAUTH_TOKEN_EXPIRES_AT_UTC": datetime.fromtimestamp(
-                self._expires_at, tz=timezone.utc,
-            ).isoformat(),
+            "OAUTH_TOKEN_EXPIRES_AT": self._refresh_token_rotated_at,
+            "OAUTH_TOKEN_EXPIRES_AT_UTC": self._refresh_token_rotated_at_utc,
         }
 
         if self.auth_type == "app":
             values["OAUTH_REFRESH_TOKEN"] = ""
+            values["OAUTH_REFRESH_TOKEN_ROTATED_AT"] = ""
+            values["OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC"] = ""
+            values["OAUTH_USERNAME"] = ""
+        else:
+            values["OAUTH_REFRESH_TOKEN"] = self._refresh_token
             values["OAUTH_USERNAME"] = self._username or ""
 
         set_env_keys(self.env_path, values)
