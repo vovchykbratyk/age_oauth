@@ -1,6 +1,6 @@
 # age-oauth
 
-`age-oauth` is a convenience package which makes it easier for script users to interact with an ArcGIS Enterprise by simplifying the OAuth 2.0 process, and eliminating the need (and bad security practice) of having to store username/passwords in your scripts.
+`age-oauth` is a convenience package which makes it easier for script users to interact with ArcGIS Enterprise by simplifying the OAuth 2.0 process, and eliminating the need (and bad security practice) of having to store username/passwords in your scripts.  `age-oauth` supports the storage of multiple connections - this could be different scopes on the same Portal, or multiple Portals, or a combination of the two.  Moreover, multiple connections can be used in any automation by simply calling them by their storage label.
 
 ## Install
 
@@ -21,14 +21,29 @@ python -m pip install "age-oauth[full]"
 
 ### Step 0: Prereqs
 
-This README presumes you already have the needed permissions to have created a valid set of OAuth 2.0 app/developer tokens on a target ArcGIS Enterprise system. You should have ready:
+This README presumes you already have the needed permissions to have created a valid set of OAuth 2.0 app/developer tokens on a target ArcGIS Enterprise system. There are two paths that `age-oauth` supports:
 
+| authentication type | use when | OAuth flow
+|---|---|---
+|`user` | access assets as yourself | auth code + refresh token
+|`application` | access assets as an application | client credentials
+
+In either case, you'll need:
 * the Portal root URL (e.g., `https://somwhere.com/portal`)
 * OAuth2 client ID
 * OAuth2 client secret
-* The app's Redirect URI set to `urn:ietf:wg:oauth:2.0:oob` (Esri's default out of band URI)
 
-### Step 1: Add a Portal to your local store
+For **user authentication** you are going to need an out-of-band URI for redirect when you create the credentials in ArcGIS Enterprise, if you're not creating a web app with a server:
+
+```urn:ietf:wg:oauth:2.0:oob```
+
+For **application authentication** no user redirect or browser challenge is required.  Depending on the ArcGIS Enterprise config, you might need to supply the HTTP referer associated with the application. If it's just a script with no web server, just use `https:\\localhost`.
+
+### Step 0.1: PERMISSIONS
+
+Permissions matter - app credentials can be configured with application permissions, or depending on Portal configuration and the privileges of the creating user, it could be set to impersonate the user.  Please verify the permissions you give the application in ArcGIS Enterprise and square this all away with your cybersecurity folks before using it for unattended automation.  You've been warned!
+
+### Step 1: Add a connection
 
 Run:
 
@@ -36,41 +51,46 @@ Run:
 age-oauth connections add
 ```
 
-You'll be prompted for the following:
+You'll be prompted for the connection settings, including whether the connection authenticates as a **user** or as an **application**.
 
-```text
-Connection label:        <short, plain language name to identify portal, no spaces>
-Portal URL:              https://somewhere.com/portal
-Verify SSL:              false, true, or path to custom CA cert
-OAuth Client ID:         <your client ID>
-OAuth Client Secret:     <your client secret>
-```
+Connections are given a friendly label so scripts can refer to them without embedding portal URLs, client IDs, secrets, or tokens.
 
-When it's done, you'll see:
-
-```powershell
-[OK] Created connection: my_portal
-```
 
 #### Step 1.a: Add the Portal non-interactively
 
-You can also add the Portal non-interactively.  Assuming a PowerShell environment:
+You can also add the Portal non-interactively.  Assuming a PowerShell environment and a **user** credential:
 
 ```powershell
 age-oauth connections add `
-  --label "Prod" `
+  --label "some user" `
   --portal "https://somewhere.com/portal" `
+  --auth-type user `
   --verify-ssl false `
   --client-id "client_id_value" `
   --client-secret "client_secret_value"
 ```
+If your ArcGIS Enterprise uses a private CA, you can pass the CA's path to `--verify-ssl` instead.
+
+Assuming an **application** credential, it would be done like this:
+
+```powershell
+age-oauth connections add `
+  --label "some app" `
+  --portal "https://somewhere.com/portal" `
+  --auth-type app `
+  --referer "https://localhost" `
+  --verify-ssl true `
+  --client-id "client_id_value" `
+  --client-secret "client_secret_value"
+```
+
 
 ### Step 2: Authenticate / Onboard
 
-Now we'll authenticate for the first time (interactively, from CLI)
+Now we'll authenticate for the first time (interactively, from CLI).  We'll use a **user** auth type for example - **application** auth types are handled in the same way, except without the browser challenge.
 
 ```powershell
-age-oauth login --connection my_portal
+age-oauth login --connection "some user"
 ```
 
 You'll see:
@@ -98,7 +118,7 @@ Token is for user: your.username
 To verify, do:
 
 ```powershell
-age-oauth whoami --connection my_portal
+age-oauth whoami --connection "some user"
 ```
 
 You should see:
@@ -111,12 +131,12 @@ Your OAuth credentials are now onboarded and you can proceed to use it programma
 
 ### Step 4: Programmatic use
 
-Now, you can use it in Python:
+Now, you can use it in Python!
 
 ```python
 from age_oauth import get_gis
 
-gis = get_gis(connection="my_portal")
+gis = get_gis(connection="some user")
 
 # verify
 print(gis.properties.portalName)
@@ -125,7 +145,7 @@ print(gis.users.me.username)
 No username/passwords, no tokens, no PKI decryption in your scripts. `age-oauth` handles negotiation and refresh automatically.
 
 
-### Rotation of refresh_token
+### Rotation of refresh_token for user access
 
 While calling the library programmatically will automatically update the `refresh_token` associated with the active connection automatically (3 day duration), users or admins can also call it interactively.
 
