@@ -391,8 +391,11 @@ class AGEOAuth:
             "OAUTH_REDIRECT_URI": self.redirect_uri,
             "OAUTH_SCOPE": self.scope,
             "OAUTH_ACCESS_TOKEN": self._access_token,
-            "OAUTH_TOKEN_EXPIRES_AT": self._refresh_token_rotated_at,
-            "OAUTH_TOKEN_EXPIRES_AT_UTC": self._refresh_token_rotated_at_utc,
+            "OAUTH_TOKEN_EXPIRES_AT": str(self._expires_at),
+            "OAUTH_TOKEN_EXPIRES_AT_UTC": datetime.fromtimestamp(
+                self._expires_at,
+                tz=timezone.utc,
+            ).isoformat(),
         }
 
         if self.auth_type == "app":
@@ -402,6 +405,8 @@ class AGEOAuth:
             values["OAUTH_USERNAME"] = ""
         else:
             values["OAUTH_REFRESH_TOKEN"] = self._refresh_token
+            values["OAUTH_REFRESH_TOKEN_ROTATED_AT"] = self._refresh_token_rotated_at
+            values["OAUTH_REFRESH_TOKEN_ROTATED_AT_UTC"] = self._refresh_token_rotated_at_utc
             values["OAUTH_USERNAME"] = self._username or ""
 
         set_env_keys(self.env_path, values)
