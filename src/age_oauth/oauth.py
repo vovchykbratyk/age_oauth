@@ -144,10 +144,26 @@ class AGEOAuth:
         self.config = config
         self.env_path = str(Path(config.env_path).expanduser())
 
-        env = parse_env_file(self.env_path)
+        self.env = parse_env_file(self.env_path)
+        env = self.env
         
-        # verify can be bool or path
+        # verify can be bool or path to custom CA
         self.verify_ssl = _coerce_verify_ssl(env.get("OAUTH_VERIFY_SSL"), default=config.verify_ssl)
+
+        verify_raw = (env.get("OAUTH_VERIFY_SSL") or "").strip()
+
+        if not verify_raw:
+            if isinstance(self.verify_ssl, bool):
+                verify_persisted = "true" if self.verify_ssl else "false"
+            else:
+                verify_persisted = str(Path(self.verify_ssl).expanduser())
+
+            set_env_key(
+                self.env_path,
+                "OAUTH_VERIFY_SSL",
+                verify_persisted,
+            )
+            self.env["OAUTH_VERIFY_SSL"] = verify_persisted
 
         # config defaults
         self.portal_url = (env.get("PORTAL_URL") or config.portal_url).rstrip("/")
@@ -358,41 +374,37 @@ class AGEOAuth:
 
     def _persist(self) -> None:
         """
-        Persist everything into this profile's env file.
+        persist the current connection state into this profile's env
         """
-        env_path = self.env_path
-
-        def save(key: str, value: object) -> None:
-            set_env_key(env_path, key, str(value))
-
-        # core
-        save("PORTAL_URL", self.portal_url)
-        save("OAUTH_CLIENT_ID", self.client_id)
-        save("OAUTH_CLIENT_SECRET", self.client_secret)
-        save("OAUTH_AUTH_TYPE", self.auth_type)
-        save("OAUTH_REFERER", self.referer or "")
-
         v = self.verify_ssl
         if isinstance(v, bool):
-            save("OAUTH_VERIFY_SSL", "true" if v else "false")
+            verify_ssl = "true" if v else "false"
         else:
-            save("OAUTH_VERIFY_SSL", str(Path(v).expanduser()))
+            verify_ssl = str(Path(v).expanduser())  # in case of custom CA cert
 
-        # token-ish
-        save("OAUTH_REDIRECT_URI", self.redirect_uri)
-        save("OAUTH_SCOPE", self.scope)
+        values = {
+            "PORTAL_URL": self.portal_url,
+            "OAUTH_CLIENT_ID": self.client_id,
+            "OAUTH_CLIENT_SECRET": self.client_secret,
+            "OAUTH_AUTH_TYPE": self.auth_type,
+            "OAUTH_REFERER": self.referer or "",
+            "OAUTH_VERIFY_SSL": verify_ssl,
+            "OAUTH_REDIRECT_URI": self.redirect_uri,
+            "OAUTH_SCOPE": self.scope,
+            "OAUTH_ACCESS_TOKEN": self._access_token,
+            "OAUTH_TOKEN_EXPIRES_AT": str(self._expires_at),
+            "OAUTH_TOKEN_EXPIRES_AT_UTC": datetime.fromtimestamp(
+                self._expires_at, tz=timezone.utc,
+            ).isoformat(),
+        }
+
         if self.auth_type == "app":
-            save("OAUTH_REFRESH_TOKEN", "")
-            save("OAUTH_USERNAME", "")
-        else:
-            save("OAUTH_REFRESH_TOKEN", self._refresh_token)
-            if self._username:
-                save("OAUTH_USERNAME", self._username)
+            values["OAUTH_REFRESH_TOKEN"] = ""
+            values["OAUTH_USERNAME"] = self._username or ""
 
-        save("OAUTH_ACCESS_TOKEN", self._access_token)
-        save("OAUTH_TOKEN_EXPIRES_AT", self._expires_at)  # epoch
-        iso_expiration = datetime.fromtimestamp(self._expires_at, tz=timezone.utc).isoformat()
-        save("OAUTH_TOKEN_EXPIRES_AT_UTC", iso_expiration)
+        set_env_keys(self.env_path, values)
+
+        self.env.update(values)
 
 
 def _load_auth_for_connection(
