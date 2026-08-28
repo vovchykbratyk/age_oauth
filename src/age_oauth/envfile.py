@@ -42,6 +42,8 @@ def _acquire_lock(
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"Timed out waiting for env file lock: {lock_path}"
+                    "if no age-oauth process is using this connection, "
+                    "the lock file may be stale and can be deleted"
                 )
 
             time.sleep(poll_seconds)
@@ -112,7 +114,10 @@ def _load_env_fallback(env_path: str) -> Dict[str, str]:
 
 def load_env(env_path: str) -> None:
     """
-    loader uses python-dotenv when present, falls back to local functions
+    load vals from an env file into os.environ without overwriting existing
+    env variables
+
+    NOTE: prefer parse_env_file() for profile reads without global side effects
     """
     env_path = str(Path(env_path).expanduser())
     if _HAVE_DOTENV and _dotenv_load is not None:
