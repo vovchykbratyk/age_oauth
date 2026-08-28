@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Dict
 from pathlib import Path
 
@@ -8,12 +9,49 @@ from pathlib import Path
 # check if python-dotenv is there, use internal fallback if not
 try:
     from dotenv import load_dotenv as _dotenv_load  # type: ignore
-    from dotenv import set_key as _dotenv_set_key   # type: ignore
     _HAVE_DOTENV = True
 except Exception:
     _dotenv_load = None
-    _dotenv_set_key = None
     _HAVE_DOTENV = False
+
+
+def _acquire_lock(
+    lock_path: Path,
+    *,
+    timeout_seconds: float = 10.0,
+    poll_seconds: float = 0.05,
+) -> None:
+
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            fd = os.open(
+                str(lock_path),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+            try:
+                os.write(
+                    fd,
+                    f"pid={os.getpid()}\n".encode("utf-8"),
+                )
+            finally:
+                os.close(fd)
+
+            return
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for env file lock: {lock_path}"
+                )
+
+            time.sleep(poll_seconds)
+
+
+def _release_lock(lock_path: Path) -> None:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _strip_quotes(s: str) -> str:
@@ -66,44 +104,6 @@ def _load_env_fallback(env_path: str) -> Dict[str, str]:
     return parsed
 
 
-def _set_key_fallback(env_path: str, key: str, value: str) -> None:
-    """
-    minimalistic .env writer
-    """
-    p = Path(env_path).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    lines = []
-    if p.exists():
-        lines = p.read_text(encoding="utf-8").splitlines()
-
-    quoted_val = _quote_env_value(value)
-    updated = False
-    new_lines = []
-
-    for line in lines:
-        stripped = line.lstrip()
-        if stripped.startswith("#") or "=" not in line:
-            new_lines.append(line)
-            continue
-
-        existing_key = line.split("=", 1)[0].strip()
-        if existing_key == key:
-            new_lines.append(f"{key}={quoted_val}")
-            updated = True
-        else:
-            new_lines.append(line)
-
-    if not updated:
-        if new_lines and new_lines[-1].strip() != "":
-            new_lines.append("")  # nice separation
-        new_lines.append(f"{key}={quoted_val}")
-
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-    tmp.replace(p)
-
-
 def load_env(env_path: str) -> None:
     """
     loader uses python-dotenv when present, falls back to local functions
@@ -124,12 +124,77 @@ def parse_env_file(env_path: str | Path) -> Dict[str, str]:
     return _parse_env_file(p)
 
 
-def set_env_key(env_path: str, key: str, value: str) -> None:
+def set_env_key(env_path: str | Path, key: str, value: str) -> None:
     """
-    setter uses python-dotenv when present, falls back to local functions
+    setter wraps batch setter (set_env_keys)
     """
-    env_path = str(Path(env_path).expanduser())
-    if _HAVE_DOTENV and _dotenv_set_key is not None:
-        _dotenv_set_key(env_path, key, value)
-    else:
-        _set_key_fallback(env_path, key, value)
+    set_env_keys(env_path, {key: value},)
+
+
+def set_env_keys(
+    env_path: str | Path,
+    values: Dict[str, str],
+) -> None:
+    """
+    update one more more keys in an env file
+
+    writers are serialized with a lock to protect the entire transaction
+    """
+    p = Path(env_path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    lock_path = p.with_name(p.name + ".lock")
+    _acquire_lock(lock_path)
+
+    try:
+        lines = (
+            p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+        )
+
+        pending = {key: str(value) for key, value in values.items()}
+
+        written: set[str] = set()
+        new_lines: list[str] = []
+
+        for line in lines:
+            stripped = line.lstrip()
+
+            if stripped.startswith("#") or "=" not in line:
+                new_lines.append(line)
+                continue
+
+            existing_key = line.split("=", 1)[0].strip()
+
+            if existing_key in pending:
+                new_lines.append(
+                    f"{existing_key}="
+                    f"{_quote_env_value(pending[existing_key])}"
+                )
+                written.add(existing_key)
+            else:
+                new_lines.append(line)
+
+        missing_keys = [key for key in pending if key not in written]
+
+        if missing_keys:
+            if new_lines and new_lines[-1].strip():
+                new_lines.append("")
+
+            for key in missing_keys:
+                new_lines.append(f"{key}={_quote_env_value(pending[key])}")
+
+        text = "\n".join(new_lines) + "\n"
+
+        tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, p)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    finally:
+        _release_lock(lock_path)
