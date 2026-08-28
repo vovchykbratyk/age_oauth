@@ -56,14 +56,20 @@ def _release_lock(lock_path: Path) -> None:
 
 def _strip_quotes(s: str) -> str:
     s = s.strip()
-    if len(s) >= 2 and ((s[0] == s[-1]) and s[0] in ("'", '"')):
-        return s[1:-1]
+
+    if len(s) >= 2 and s[0] == s[-1]:
+        if s[0] == '"':
+            return (s[1:-1].replace('\\"', '"').replace("\\\\", "\\"))
+        if s[0] == "'":
+            return s[1:-1]
     return s
 
 
 def _quote_env_value(v: str) -> str:
-    if v == "" or any(c.isspace() for c in v) or "#" in v:
-        return '"' + v.replace('"', '\\"') + '"'
+    if v == "" or any(c.isspace() for c in v) or "#" in v or '"' in v:
+        escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
     return v
 
 
