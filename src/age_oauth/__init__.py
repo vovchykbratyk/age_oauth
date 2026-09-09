@@ -1,6 +1,6 @@
 from .oauth import OAuthConfig, AGEOAuth, get_gis
 from .connections import ConnectionStore
-from .connection import Connection
+from .connection import Connection, list_connections
 
 __all__ = [
     "OAuthConfig",
@@ -8,4 +8,5 @@ __all__ = [
     "get_gis",
     "ConnectionStore",
     "Connection",
+    "list_connections",
 ]
