@@ -120,3 +120,11 @@ class Connection:
             )
         except Exception:
             return f"Connection(id={self._id!r})"
+
+
+def list_connections() -> list[Connection]:
+    """
+    returns all saved age-oauth connections as Connection objects
+    """
+    store = ConnectionStore()
+    return [Connection(connection_id=meta.id) for meta in store.list()]
