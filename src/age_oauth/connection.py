@@ -99,6 +99,14 @@ class Connection:
             prompt_if_missing=prompt_if_missing,
         )
 
+    def get_identity(self, gis):
+        """
+        resolve the authenticated user or app identity for this connection
+        """
+        from .oauth import resolve_identity
+
+        return resolve_identity(gis, connection_id=self._id)
+
     def __repr__(self) -> str:
         try:
             meta = self.meta
