@@ -1,49 +1,54 @@
 # age-oauth
 
-`age-oauth` is a convenience package which makes it easier for script users to interact with ArcGIS Enterprise by simplifying the OAuth 2.0 process, and eliminating the need (and bad security practice) of having to store username/passwords in your scripts.  `age-oauth` supports the storage of multiple connections - this could be different scopes on the same Portal, or multiple Portals, or a combination of the two.  Moreover, multiple connections can be used in any automation by simply calling them by their storage label.
+`age-oauth` simplifies access to an ArcGIS Enterprise via OAuth 2.0 credentials (application or user), and eliminates the need (and bad security practice) of storing username/passwords/tokens in your scripts.  `age-oauth` also stores and indexes multiple connection profiles - these connections could be different scopes on the same Portal, or multiple Portals, or a combination of the two.  Moreover, multiple connections can be used in any automation by simply calling them by their storage label.
+
+## Pre-Requisites and OAuth 2.0 Item Creation
+
+This README assumes that you already have the permissions needed to create OAuth 2.0 app/developer tokens on an ArcGIS Enterprise instance.
+
+`age-oauth` supports two paths for OAuth 2.0; **user** and **application**.
+
+| Auth type | Use when you need to... | OAuth flow
+|---|---|---
+|`user` | access assets as yourself | auth code + refresh token
+|`application` | access assets as an application | client credentials
+
+If you are creating an OAuth item and do not have your own web server (e.g., you're just running manual or automated scripts), you will need to use either an out-of-band (OOB) URI for the redirect value (for **user** auth type) or a dummy referrer value (for **app** auth type) when prompted:
+
+Default OOB URI (user): `urn:ietf:wg:oauth:2.0:oob`
+Dummy referrer (app): `https://localhost`
+
+### Application Permissions
+
+On ArcGIS Enterprise 11.4+, OAuth 2.0 App credentials can be configured with application permissions, or depending on Portal configuration and the privileges of the creating user, it could be set to impersonate the user.  **Please verify the permissions you give the application in ArcGIS Enterprise and coordinate with your administrators before using it for unattended automation.  You've been warned!**
 
 ## Install
 
-Minimal (fine if you're installing into an ArcGIS Pro conda environment, e.g. `arcgispro-py3` or clones):
+Use `pip` to install `age-oauth`.
+
+### Minimal
+
+This is fine if you're installing into an ArcGIS Pro conda environment, e.g. `arcgispro-py3` or if you don't need the `arcgis` package.
 
 ```
 python -m pip install age-oauth
 ```
 
-Full dependencies (installs `arcgis` and `arcgis-mapping`):
+### Full
+
+This will install `arcgis` and `arcgis-mapping` and give you full **ArcGIS API for Python** access.
 
 ```
 python -m pip install "age-oauth[full]"
 ```
 
+## Use
 
-## Usage
+### Add a Connection
 
-### Step 0: Prereqs
+Connections are added via CLI, and can be created interactively or non-interactively.
 
-This README presumes you already have the needed permissions to have created a valid set of OAuth 2.0 app/developer tokens on a target ArcGIS Enterprise system. There are two paths that `age-oauth` supports:
-
-| authentication type | use when | OAuth flow
-|---|---|---
-|`user` | access assets as yourself | auth code + refresh token
-|`application` | access assets as an application | client credentials
-
-In either case, you'll need:
-* the Portal root URL (e.g., `https://somwhere.com/portal`)
-* OAuth2 client ID
-* OAuth2 client secret
-
-For **user authentication** you are going to need an out-of-band URI for redirect when you create the credentials in ArcGIS Enterprise, if you're not creating a web app with a server:
-
-```urn:ietf:wg:oauth:2.0:oob```
-
-For **application authentication** no user redirect or browser challenge is required.  Depending on the ArcGIS Enterprise config, you might need to supply the HTTP referer associated with the application. If it's just a script with no web server, just use `https:\\localhost`.
-
-### Step 0.1: PERMISSIONS
-
-Permissions matter - app credentials can be configured with application permissions, or depending on Portal configuration and the privileges of the creating user, it could be set to impersonate the user.  Please verify the permissions you give the application in ArcGIS Enterprise and square this all away with your cybersecurity folks before using it for unattended automation.  You've been warned!
-
-### Step 1: Add a connection
+#### Add Connection Interactively
 
 Run:
 
@@ -56,9 +61,9 @@ You'll be prompted for the connection settings, including whether the connection
 Connections are given a friendly label so scripts can refer to them without embedding portal URLs, client IDs, secrets, or tokens.
 
 
-#### Step 1.a: Add the Portal non-interactively
+#### Add Connection Non-interactively
 
-You can also add the Portal non-interactively.  Assuming a PowerShell environment and a **user** credential:
+You can also add the Portal non-interactively.  For a new **user** connection type:
 
 ```powershell
 age-oauth connections add `
@@ -69,9 +74,8 @@ age-oauth connections add `
   --client-id "client_id_value" `
   --client-secret "client_secret_value"
 ```
-If your ArcGIS Enterprise uses a private CA, you can pass the CA's path to `--verify-ssl` instead.
 
-Assuming an **application** credential, it would be done like this:
+For a new **application** credential:
 
 ```powershell
 age-oauth connections add `
@@ -84,10 +88,13 @@ age-oauth connections add `
   --client-secret "client_secret_value"
 ```
 
+#### Private/Custom CAs
 
-### Step 2: Authenticate / Onboard
+**NOTE:** If your ArcGIS Enterprise uses a private CA, you can pass the CA's path to `--verify-ssl`.
 
-Now we'll authenticate for the first time (interactively, from CLI).  We'll use a **user** auth type for example - **application** auth types are handled in the same way, except without the browser challenge.
+### First Authentication / Onboarding
+
+**User** and **application** OAuth credential types are logged in the same way.  For a **user** connection profile, a browser challenge-response will be presented.
 
 ```powershell
 age-oauth login --connection "some user"
@@ -99,21 +106,18 @@ You'll see:
 Opening browser for ArcGIS Enterprise OAuth sign-in...
 ```
 
-A browser will open to your Portal login screen. You need to:
-
-1. Sign in
-2. Portal displays an authorization code
-3. Copy the code
-4. Paste it back into the terminal where you are being prompted for it
+A browser will open to your Portal login screen.  Sign in, grab the **authorization code** and paste it back into the shell where you are being prompted for it.
 
 `age-oauth` will swap the authorization code for an **access token**, a **refresh token**, and an **expiration timestamp**. This is then securely stored in your user profile. If all is successful, you'll see:
 
 ```powershell
-New access_token acquired!  Expires in: 1:00:00
+New access_token acquired!  Expires in: 2:00:00
 Token is for user: your.username
 ```
 
-### Step 3: Confirm authentication
+For **application** connection profiles, `age-oauth` will cache, access and fetch new access tokens as needed in accordance with a Portal's expiration policy.
+
+### Validate Connection and Identity
 
 To verify, do:
 
@@ -121,29 +125,54 @@ To verify, do:
 age-oauth whoami --connection "some user"
 ```
 
-You should see:
+In the case of a **user** you should see:
 
 ```powershell
 your.username
 ```
 
-Your OAuth credentials are now onboarded and you can proceed to use it programmatically.
+In the case of an **application**, you should see:
 
-### Step 4: Programmatic use
+```powershell
+Type:        application
+Application: Application Name
+App ID:      XXXXXXXXXXXXXXXX
+Item ID:     XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+Owner:       your.username
+```
+
+Your OAuth credentials are now onboarded and you can start using them programmatically.
+
+### Python API
 
 Now, you can use it in Python!
 
 ```python
-from age_oauth import get_gis
+from age_oauth import Connection, list_connections
 
-gis = get_gis(connection="some user")
+# Create an authenticated arcgis.gis.GIS object by label
+portal_conn = Connection(connection="connection label")
+gis = portal_conn.get_gis()
 
-# verify
-print(gis.properties.portalName)
-print(gis.users.me.username)
+# Create an authenticated session by index
+portal_conns = list_connections()
+print(portal_conns)
+
+# result
+#	['some user', 'some application', 'another connection']
+
+# Initialize multiple Connection objects in the same script
+
+my_conns = {
+    conn.label: conn.get_gis()
+    for conn in list_connections()
+}
+
+user_conn = my_conns["some user"]
+app_conn = my_conns["some application"]
 ```
-No username/passwords, no tokens, no PKI decryption in your scripts. `age-oauth` handles negotiation and refresh automatically.
 
+No username/passwords, no tokens, no janky PKI decryption in your scripts. `age-oauth` handles negotiation and refresh automatically.
 
 ### Rotation of refresh_token for user access
 
@@ -187,33 +216,12 @@ gis = GIS("https://my-portal.com/portal", "username", "password")
 gis = GIS("https://my-portal.com/portal", token="abcdef12345abcdef12345abcdef...")
 ```
 
-Or do any number of other sketchy things like -
+Or do any number of other sketchy things.  This creates both security and maintainability problems, with increased technical debt at best and compromise at worst.
 
-* usernames/passwords in `.py` or sidecar files
-* decrypt PKI client certs into unencrypted, plain-text `.pem` files
-* copy static access tokens from a browser
-* paste your API keys right into scripts
+In a secure setting, we want revocable credentials, clear ownership of the access object, an expiration policy and centralized management.  This is exactly what the OAuth workflow gives you when it's properly used.
 
-All of these practices create both security and maintainability problems, with compromise at worst and increased technical debt at best. In a secure setting, we're going for:
-
-* credentials that can be revoked
-* clear ownership of access
-* clear expiration policy
-* centralized control
-
-This is exactly what the OAuth workflow gives you when it's properly used. You have to authenticate via Portal. A short-lived `access_token` is issued (expiration and rotation policy). A longer-lived `refresh_token` can renew access automatically once the "app" is authorized. These tokens can then be revoked via Portal (centralization). So while nothing's perfect, this workflow aligns much better with typical enterprise security expectations.
-
-`age-oauth` is designed to make the more secure way also the more convenient way. It will give you:
-
-* A per-user connection store to manage multiple Portal connections
-* OAuth client configuration per Portal
-* Automatic token refresh
-* A simple, injected `arcgis.gis.GIS` class object instantiated via `age_oauth.get_gis()`
+`age-oauth` is designed to make this way (the more secure way) also the more convenient way.
 
 ### But why not just use API keys?
 
-ArcGIS Enterprise developer API keys are useful, but they have short lifetimes and require manual renewal. This introduces friction into automations you may need to run under your human-user persona. OAuth supports refresh tokens that can be reused indefinitely to get new access tokens. Going through the up-front setup to establish OAuth client access pays off in the long run by giving you way cleaner scripts that are:
-
-* more easily maintained,
-* can be passed around without fear of accidentally leaking credentials,
-* better aligned with enterprise security and therefore help everyone sleep better at night.
+ArcGIS Enterprise developer API keys are useful, but they have short lifetimes and require manual renewal. This introduces friction into automations you may need to run under your human-user persona. OAuth supports refresh tokens that can be reused indefinitely to get new access tokens. Going through the up-front setup to establish OAuth client access pays off in the long run by giving you way cleaner scripts that are easier to maintain, can be passed around without fear of leaking your credentials, and helps your security folks sleep better at night.
